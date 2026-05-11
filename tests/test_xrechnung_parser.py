@@ -236,6 +236,13 @@ def test_rendered_pdf_has_no_javascript_warning_or_tab_buttons(
     assert "Laufzettel" not in page_text, (
         "PDF still contains a viewer tab button label (Laufzettel)."
     )
+    # KoSIT prints the same disclaimer at the top of each unfolded tab
+    # panel. _strip_duplicate_disclaimers() collapses them to one.
+    disclaimer_fragment = "übernehmen keine Haftung"
+    assert page_text.count(disclaimer_fragment) <= 1, (
+        f"Disclaimer appears {page_text.count(disclaimer_fragment)} times; "
+        "_strip_duplicate_disclaimers should leave at most one."
+    )
 
 
 @needs_rendering

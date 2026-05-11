@@ -100,7 +100,33 @@ def render_xrechnung_to_pdf(xml_bytes: bytes, out_pdf: Path) -> None:
     _ensure_xslt_present(_HTML_STYLESHEET)
 
     html = _xml_to_html(xml_bytes, stylesheet)
+    html = _strip_duplicate_disclaimers(html)
     _html_to_pdf(html, out_pdf)
+
+
+def _strip_duplicate_disclaimers(html: bytes) -> bytes:
+    """Keep only the first ``<div class="haftungausschluss">``.
+
+    KoSIT's viewer puts the same "Wir übernehmen keine Haftung für die
+    Richtigkeit der Daten." block at the top of every tab panel — fine in
+    the interactive viewer where only one panel shows at a time, but in our
+    print rendition (all panels unfolded) the text repeats four times.
+
+    Pure CSS can't express "first occurrence across different parents", so
+    we do this as a tiny DOM pass before WeasyPrint sees the document.
+    """
+    from lxml import html as lxml_html  # noqa: PLC0415
+
+    doc = lxml_html.fromstring(html)
+    discs = doc.xpath(
+        '//div[contains(concat(" ", normalize-space(@class), " "), '
+        '" haftungausschluss ")]',
+    )
+    for extra in discs[1:]:
+        parent = extra.getparent()
+        if parent is not None:
+            parent.remove(extra)
+    return lxml_html.tostring(doc, encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -208,8 +234,17 @@ script { display: none !important; }
    affordance that looks wrong on a printed invoice. Force a white page. */
 body { background: #fff !important; }
 
-/* Keep section headers with their content rather than orphaning them. */
-h1, h2, h3, h4 { page-break-after: avoid; }
+/* Keep section headers with their content rather than orphaning them.
+   KoSIT uses div-based pseudo-headings (.boxtitel is the blue title bar,
+   .boxtitelSub is the lighter sub-title), so real h1..h4 isn't enough. */
+h1, h2, h3, h4,
+.boxtitel, .boxtitelSub { page-break-after: avoid; }
+
+/* Keep label/value groups (a "box" — e.g. the Käufer or Verkäufer card)
+   on a single page where they fit. WeasyPrint treats this as a hint:
+   over-sized boxes will still break across pages, but small ones won't
+   be split needlessly. */
+.box { page-break-inside: avoid; }
 """
 
 
