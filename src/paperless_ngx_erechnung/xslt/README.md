@@ -31,5 +31,5 @@ Files this plugin uses (paths relative to this directory):
 | `cii-xr.xsl`               | UN/CEFACT CII → XR                     |
 | `xrechnung-html.xsl`       | XR → HTML (rendered to PDF downstream) |
 
-`paperless_erechnung.rendering` references these by filename; update both
+`paperless_ngx_erechnung.rendering` references these by filename; update both
 sides if the upstream renames anything.

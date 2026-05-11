@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-logger = logging.getLogger("paperless_erechnung.thumbnail")
+logger = logging.getLogger("paperless_ngx_erechnung.thumbnail")
 
 
 def render_first_page_webp(

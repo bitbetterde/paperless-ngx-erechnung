@@ -1,4 +1,4 @@
-# paperless-erechnung
+# paperless-ngx-erechnung
 
 > [!WARNING]
 > This plugin only works with Paperless-ngx v3.0 or greater. At the time of publication, this version of Paperless-ngx hasn't been released as a stable version. To test this plugin you need to run the `beta` branch of Paperless-ngx.
@@ -50,14 +50,14 @@ defaults for matching files without affecting anything else.
 
 ## Vendored stylesheets
 
-`src/paperless_erechnung/xslt/` contains a pinned snapshot of the KoSIT
+`src/paperless_ngx_erechnung/xslt/` contains a pinned snapshot of the KoSIT
 XRechnung-Visualization stylesheets (Apache-2.0). See `xslt/README.md` for
 the pinned version and re-vendoring instructions.
 
 ## Installation
 
 ```bash
-pip install paperless-erechnung
+pip install paperless-ngx-erechnung
 ```
 
 Inside the Paperless-ngx Docker image, mount the package in or build a custom
@@ -74,8 +74,20 @@ brew install pango
 # pulls in cairo, harfbuzz, gdk-pixbuf, fontconfig, glib, libffi
 ```
 
-On Debian/Ubuntu the equivalent is
-`apt install libpango-1.0-0 libpangoft2-1.0-0`. See WeasyPrint's
+WeasyPrint resolves these libraries by SONAME (e.g. `libgobject-2.0-0`),
+which macOS's loader doesn't find under `/opt/homebrew/lib` by default.
+Export the prefix once in your shell rc:
+
+```bash
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
+```
+
+Without this, the WeasyPrint-dependent tests skip with
+`cannot load library 'libgobject-2.0-0'` instead of running.
+
+On Debian/Ubuntu the equivalent system install is
+`apt install libpango-1.0-0 libpangoft2-1.0-0` (no `DYLD_*` needed). See
+WeasyPrint's
 [installation docs](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#installation)
 for other platforms. All other runtime dependencies (qpdf for pikepdf,
 libxml2/libxslt for lxml, libpdfium, Saxon-HE native libs, Pillow) are
@@ -94,5 +106,5 @@ GPL-3.0-only — matching Paperless-ngx itself, since this plugin runs in-proces
 with Paperless and the combined work is most cleanly distributed under a single
 license. See `LICENSE` for the full text.
 
-Bundled KoSIT XSLT under `src/paperless_erechnung/xslt/` is Apache-2.0
-(GPL-3.0-compatible); see `src/paperless_erechnung/xslt/LICENSE`.
+Bundled KoSIT XSLT under `src/paperless_ngx_erechnung/xslt/` is Apache-2.0
+(GPL-3.0-compatible); see `src/paperless_ngx_erechnung/xslt/LICENSE`.

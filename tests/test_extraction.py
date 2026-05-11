@@ -6,8 +6,8 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 
-from paperless_erechnung.extraction import InvoiceData
-from paperless_erechnung.extraction import extract_invoice_fields
+from paperless_ngx_erechnung.extraction import InvoiceData
+from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
 
 # --------------------------------------------------------------------------- #

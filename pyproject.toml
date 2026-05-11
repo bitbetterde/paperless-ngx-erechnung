@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "paperless-erechnung"
+name = "paperless-ngx-erechnung"
 version = "0.1.0.dev0"
 description = "German E-Rechnung (XRechnung + ZUGFeRD/Factur-X) parser plugin for Paperless-ngx"
 readme = "README.md"
@@ -44,20 +44,20 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/moritzfreidank/paperless-erechnung"
-Issues = "https://github.com/moritzfreidank/paperless-erechnung/issues"
+Homepage = "https://github.com/bitbetterde/paperless-ngx-erechnung"
+Issues = "https://github.com/bitbetterde/paperless-ngx-erechnung/issues"
 
 # Paperless-ngx discovers parsers via this entry-point group.
 # See paperless/parsers/registry.py in paperless-ngx.
 [project.entry-points."paperless_ngx.parsers"]
-xrechnung = "paperless_erechnung.parsers:XRechnungParser"
-zugferd = "paperless_erechnung.parsers:ZUGFeRDParser"
+xrechnung = "paperless_ngx_erechnung.parsers:XRechnungParser"
+zugferd = "paperless_ngx_erechnung.parsers:ZUGFeRDParser"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/paperless_erechnung"]
+packages = ["src/paperless_ngx_erechnung"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/paperless_erechnung/xslt" = "paperless_erechnung/xslt"
+"src/paperless_ngx_erechnung/xslt" = "paperless_ngx_erechnung/xslt"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

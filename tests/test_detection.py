@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from paperless_erechnung.detection import is_xrechnung_xml
-from paperless_erechnung.detection import is_zugferd_pdf
+from paperless_ngx_erechnung.detection import is_xrechnung_xml
+from paperless_ngx_erechnung.detection import is_zugferd_pdf
 
 
 # --------------------------------------------------------------------------- #

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from paperless_erechnung.parsers import ZUGFeRDParser
+from paperless_ngx_erechnung.parsers import ZUGFeRDParser
 
 
 # A real ZUGFeRD PDF is heavy to vendor; we build minimal hybrids at runtime.
@@ -120,7 +120,7 @@ def test_extract_metadata(zugferd_pdf: Path) -> None:
 
     keys = {e["key"] for e in entries}
     assert "invoice_number" in keys
-    assert all(e["namespace"] == "urn:paperless-erechnung:zugferd" for e in entries)
+    assert all(e["namespace"] == "urn:paperless-ngx-erechnung:zugferd" for e in entries)
 
 
 def test_page_count(zugferd_pdf: Path) -> None:

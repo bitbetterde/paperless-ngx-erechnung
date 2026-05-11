@@ -24,7 +24,7 @@ from decimal import InvalidOperation
 
 from lxml import etree
 
-logger = logging.getLogger("paperless_erechnung.extraction")
+logger = logging.getLogger("paperless_ngx_erechnung.extraction")
 
 
 # --------------------------------------------------------------------------- #

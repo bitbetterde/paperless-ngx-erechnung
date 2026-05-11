@@ -17,7 +17,7 @@ from lxml import etree
 if TYPE_CHECKING:
     from pikepdf import Pdf
 
-logger = logging.getLogger("paperless_erechnung.detection")
+logger = logging.getLogger("paperless_ngx_erechnung.detection")
 
 
 # Namespaces that mark an XML file as EN 16931 invoice syntax. Syntax alone is

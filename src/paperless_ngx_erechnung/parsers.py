@@ -26,12 +26,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Self
 
-from paperless_erechnung import __version__
-from paperless_erechnung.detection import is_german_erechnung_xml
-from paperless_erechnung.detection import is_xrechnung_xml
-from paperless_erechnung.detection import is_zugferd_pdf
-from paperless_erechnung.extraction import InvoiceData
-from paperless_erechnung.extraction import extract_invoice_fields
+from paperless_ngx_erechnung import __version__
+from paperless_ngx_erechnung.detection import is_german_erechnung_xml
+from paperless_ngx_erechnung.detection import is_xrechnung_xml
+from paperless_ngx_erechnung.detection import is_zugferd_pdf
+from paperless_ngx_erechnung.extraction import InvoiceData
+from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from paperless.parsers import MetadataEntry
     from paperless.parsers import ParserContext
 
-logger = logging.getLogger("paperless_erechnung.parsers")
+logger = logging.getLogger("paperless_ngx_erechnung.parsers")
 
 # Built-in parsers all score 10. Returning 100 cleanly outranks them when
 # our detection callbacks confirm a match; returning None when they don't
@@ -47,7 +47,7 @@ logger = logging.getLogger("paperless_erechnung.parsers")
 _WIN_SCORE = 100
 
 _AUTHOR = "Moritz Stückler"
-_URL = "https://github.com/moritzfreidank/paperless-erechnung"
+_URL = "https://github.com/bitbetterde/paperless-ngx-erechnung"
 
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +72,7 @@ def _make_tempdir() -> Path:
     except Exception:
         parent = None
 
-    return Path(tempfile.mkdtemp(prefix="paperless-erechnung-", dir=parent))
+    return Path(tempfile.mkdtemp(prefix="paperless-ngx-erechnung-", dir=parent))
 
 
 def _searchable_text_block(data: InvoiceData) -> str:
@@ -292,7 +292,7 @@ class XRechnungParser:
         self._invoice = extract_invoice_fields(xml_bytes)
 
         if produce_archive:
-            from paperless_erechnung.rendering import (  # noqa: PLC0415
+            from paperless_ngx_erechnung.rendering import (  # noqa: PLC0415
                 render_xrechnung_to_pdf,
             )
 
@@ -327,7 +327,7 @@ class XRechnungParser:
         return self._archive_path
 
     def get_thumbnail(self, document_path: Path, mime_type: str) -> Path:
-        from paperless_erechnung.thumbnail import (  # noqa: PLC0415
+        from paperless_ngx_erechnung.thumbnail import (  # noqa: PLC0415
             render_first_page_webp,
         )
 
@@ -337,7 +337,7 @@ class XRechnungParser:
         # If get_thumbnail is called before parse, render on demand.
         pdf_for_thumb = self._archive_path
         if pdf_for_thumb is None:
-            from paperless_erechnung.rendering import (  # noqa: PLC0415
+            from paperless_ngx_erechnung.rendering import (  # noqa: PLC0415
                 render_xrechnung_to_pdf,
             )
 
@@ -371,7 +371,7 @@ class XRechnungParser:
         ):
             return _metadata_entries(
                 self._invoice,
-                namespace="urn:paperless-erechnung:xrechnung",
+                namespace="urn:paperless-ngx-erechnung:xrechnung",
             )
 
         # extract_metadata may be invoked without a preceding parse() call
@@ -385,7 +385,7 @@ class XRechnungParser:
             data = extract_invoice_fields(xml_bytes)
             return _metadata_entries(
                 data,
-                namespace="urn:paperless-erechnung:xrechnung",
+                namespace="urn:paperless-ngx-erechnung:xrechnung",
             )
 
         return []
@@ -516,7 +516,7 @@ class ZUGFeRDParser:
         return self._archive_path
 
     def get_thumbnail(self, document_path: Path, mime_type: str) -> Path:
-        from paperless_erechnung.thumbnail import (  # noqa: PLC0415
+        from paperless_ngx_erechnung.thumbnail import (  # noqa: PLC0415
             render_first_page_webp,
         )
 
@@ -542,7 +542,7 @@ class ZUGFeRDParser:
         ):
             return _metadata_entries(
                 self._invoice,
-                namespace="urn:paperless-erechnung:zugferd",
+                namespace="urn:paperless-ngx-erechnung:zugferd",
             )
 
         # On-demand path (API view layer reading metadata without parse).
@@ -552,5 +552,5 @@ class ZUGFeRDParser:
         data = extract_invoice_fields(xml_bytes)
         return _metadata_entries(
             data,
-            namespace="urn:paperless-erechnung:zugferd",
+            namespace="urn:paperless-ngx-erechnung:zugferd",
         )

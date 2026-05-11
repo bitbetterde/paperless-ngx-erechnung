@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from paperless_erechnung.parsers import XRechnungParser
-from paperless_erechnung.parsers import ZUGFeRDParser
+from paperless_ngx_erechnung.parsers import XRechnungParser
+from paperless_ngx_erechnung.parsers import ZUGFeRDParser
 
 
 # --------------------------------------------------------------------------- #

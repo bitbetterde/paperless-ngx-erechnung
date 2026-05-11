@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from paperless_erechnung.parsers import XRechnungParser
+from paperless_ngx_erechnung.parsers import XRechnungParser
 
 
 # --------------------------------------------------------------------------- #
@@ -83,7 +83,7 @@ def test_extract_metadata_from_disk(ubl_invoice_path: Path) -> None:
     assert "issue_date" in keys
     assert "total_amount" in keys
     # All entries share our namespace.
-    assert all(e["namespace"] == "urn:paperless-erechnung:xrechnung" for e in entries)
+    assert all(e["namespace"] == "urn:paperless-ngx-erechnung:xrechnung" for e in entries)
     assert all(e["prefix"] == "erechnung" for e in entries)
 
 

@@ -3,9 +3,9 @@
 
 Registers two parsers under the ``paperless_ngx.parsers`` entry-point group:
 
-- :class:`paperless_erechnung.parsers.XRechnungParser` for pure-XML XRechnung
+- :class:`paperless_ngx_erechnung.parsers.XRechnungParser` for pure-XML XRechnung
   (UBL Invoice, UBL CreditNote, UN/CEFACT CII).
-- :class:`paperless_erechnung.parsers.ZUGFeRDParser` for ZUGFeRD/Factur-X
+- :class:`paperless_ngx_erechnung.parsers.ZUGFeRDParser` for ZUGFeRD/Factur-X
   hybrid PDF/A-3 invoices.
 """
 

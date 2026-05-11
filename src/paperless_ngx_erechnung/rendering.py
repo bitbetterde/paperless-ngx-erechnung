@@ -21,7 +21,7 @@ from pathlib import Path
 
 from lxml import etree
 
-logger = logging.getLogger("paperless_erechnung.rendering")
+logger = logging.getLogger("paperless_ngx_erechnung.rendering")
 
 
 _XSLT_DIR = Path(__file__).parent / "xslt"
@@ -113,7 +113,7 @@ def _xml_to_html(xml_bytes: bytes, normalizer_filename: str) -> bytes:
     normalizer_path = str(_XSLT_DIR / normalizer_filename)
     html_path = str(_XSLT_DIR / _HTML_STYLESHEET)
 
-    with tempfile.TemporaryDirectory(prefix="paperless-erechnung-render-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="paperless-ngx-erechnung-render-") as tmp:
         src_path = Path(tmp) / "input.xml"
         src_path.write_bytes(xml_bytes)
 
