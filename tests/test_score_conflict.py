@@ -27,6 +27,32 @@ def test_xrechnung_declines_random_xml(tmp_path: Path) -> None:
     assert XRechnungParser.score("application/xml", "config.xml", f) is None
 
 
+# --------------------------------------------------------------------------- #
+# Capability probe: paperless-ngx calls score() with path=None from
+# is_mime_type_supported() to decide whether the upload endpoint should
+# accept a file at all. Returning None there causes the web upload to
+# reject every text/xml file with "File type text/xml not supported".
+# --------------------------------------------------------------------------- #
+
+
+def test_xrechnung_accepts_capability_probe_for_xml_mimes() -> None:
+    for mime in ("text/xml", "application/xml"):
+        score = XRechnungParser.score(mime, "", path=None)
+        assert score is not None, f"capability probe must succeed for {mime}"
+
+
+def test_xrechnung_rejects_capability_probe_for_unrelated_mime() -> None:
+    assert XRechnungParser.score("application/pdf", "", path=None) is None
+
+
+def test_zugferd_accepts_capability_probe_for_pdf() -> None:
+    assert ZUGFeRDParser.score("application/pdf", "", path=None) is not None
+
+
+def test_zugferd_rejects_capability_probe_for_unrelated_mime() -> None:
+    assert ZUGFeRDParser.score("text/xml", "", path=None) is None
+
+
 def test_zugferd_declines_plain_pdf(tmp_path: Path) -> None:
     pytest.importorskip("pikepdf")
     import pikepdf  # noqa: PLC0415

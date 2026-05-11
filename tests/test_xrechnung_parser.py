@@ -36,8 +36,12 @@ def test_score_returns_none_for_unsupported_mime() -> None:
     assert XRechnungParser.score("application/pdf", "x.pdf") is None
 
 
-def test_score_returns_none_without_path() -> None:
-    assert XRechnungParser.score("application/xml", "x.xml") is None
+def test_score_advertises_capability_without_path() -> None:
+    # paperless-ngx's is_mime_type_supported() calls score() with path=None
+    # to decide whether the upload endpoint should accept the file. We must
+    # answer non-None for our MIME types, or every text/xml upload is
+    # rejected with "File type text/xml not supported".
+    assert XRechnungParser.score("application/xml", "x.xml") is not None
 
 
 def test_score_returns_none_for_non_xrechnung_xml(tmp_path: Path) -> None:

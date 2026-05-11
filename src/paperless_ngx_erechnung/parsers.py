@@ -231,7 +231,13 @@ class XRechnungParser:
     ) -> int | None:
         if mime_type not in _XRECHNUNG_MIME_TYPES:
             return None
-        if path is None or not is_xrechnung_xml(path):
+        # Capability probe: paperless-ngx's is_mime_type_supported() calls this
+        # with path=None to ask "can anyone handle this MIME type?". Answer yes
+        # so the upload validator accepts the file; content validation runs on
+        # the real dispatch call (path is set).
+        if path is None:
+            return _WIN_SCORE
+        if not is_xrechnung_xml(path):
             return None
         return _WIN_SCORE
 
@@ -429,7 +435,10 @@ class ZUGFeRDParser:
     ) -> int | None:
         if mime_type not in _ZUGFERD_MIME_TYPES:
             return None
-        if path is None or not is_zugferd_pdf(path):
+        # See XRechnungParser.score for the path-None rationale.
+        if path is None:
+            return _WIN_SCORE
+        if not is_zugferd_pdf(path):
             return None
         return _WIN_SCORE
 
