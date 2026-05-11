@@ -140,3 +140,86 @@ def test_parse_raises_for_missing_file(tmp_path: Path) -> None:
 
     with ZUGFeRDParser() as parser, pytest.raises(ParseError):
         parser.parse(tmp_path / "missing.pdf", "application/pdf")
+
+
+# --------------------------------------------------------------------------- #
+# parse() error-message contract — every rejection path tells the user why.
+# --------------------------------------------------------------------------- #
+
+
+def test_score_claims_pdf_with_broken_attachment(tmp_path: Path) -> None:
+    """Sniff matches on the filename alone so parse() can produce a real error."""
+    import pikepdf  # noqa: PLC0415
+
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page(page_size=(595, 842))
+    pdf.attachments["factur-x.xml"] = pikepdf.AttachedFileSpec(
+        pdf,
+        b"<root/>",
+        filename="factur-x.xml",
+        mime_type="text/xml",
+        relationship=pikepdf.Name("/Alternative"),
+    )
+    out = tmp_path / "stub.pdf"
+    pdf.save(str(out))
+    score = ZUGFeRDParser.score("application/pdf", "stub.pdf", out)
+    assert score is not None and score > 10
+
+
+def test_parse_raises_for_stub_attachment(tmp_path: Path) -> None:
+    from documents.parsers import ParseError  # provided by the test shim
+    import pikepdf  # noqa: PLC0415
+
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page(page_size=(595, 842))
+    pdf.attachments["factur-x.xml"] = pikepdf.AttachedFileSpec(
+        pdf,
+        b"<root/>",
+        filename="factur-x.xml",
+        mime_type="text/xml",
+        relationship=pikepdf.Name("/Alternative"),
+    )
+    out = tmp_path / "stub.pdf"
+    pdf.save(str(out))
+
+    with ZUGFeRDParser() as parser, pytest.raises(ParseError) as excinfo:
+        parser.parse(out, "application/pdf", produce_archive=False)
+    msg = str(excinfo.value)
+    assert "factur-x.xml" in msg
+    assert "Unexpected XML root" in msg
+
+
+def test_parse_raises_for_generic_en16931_attachment(tmp_path: Path) -> None:
+    from documents.parsers import ParseError  # provided by the test shim
+    import pikepdf  # noqa: PLC0415
+
+    generic_cii = (
+        b'<?xml version="1.0"?>\n'
+        b"<rsm:CrossIndustryInvoice\n"
+        b'xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"\n'
+        b'xmlns:ram="urn:un:unece:uncefact:data:standard:'
+        b'ReusableAggregateBusinessInformationEntity:100">'
+        b"<rsm:ExchangedDocumentContext>"
+        b"<ram:GuidelineSpecifiedDocumentContextParameter>"
+        b"<ram:ID>urn:cen.eu:en16931:2017</ram:ID>"
+        b"</ram:GuidelineSpecifiedDocumentContextParameter>"
+        b"</rsm:ExchangedDocumentContext>"
+        b"</rsm:CrossIndustryInvoice>"
+    )
+
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page(page_size=(595, 842))
+    pdf.attachments["factur-x.xml"] = pikepdf.AttachedFileSpec(
+        pdf,
+        generic_cii,
+        filename="factur-x.xml",
+        mime_type="text/xml",
+        relationship=pikepdf.Name("/Alternative"),
+    )
+    out = tmp_path / "generic.pdf"
+    pdf.save(str(out))
+
+    with ZUGFeRDParser() as parser, pytest.raises(ParseError) as excinfo:
+        parser.parse(out, "application/pdf", produce_archive=False)
+    msg = str(excinfo.value)
+    assert "urn:cen.eu:en16931:2017" in msg

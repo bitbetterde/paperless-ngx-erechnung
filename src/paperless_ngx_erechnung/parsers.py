@@ -27,9 +27,12 @@ from typing import TYPE_CHECKING
 from typing import Self
 
 from paperless_ngx_erechnung import __version__
+from paperless_ngx_erechnung.detection import ErechnungValidationError
 from paperless_ngx_erechnung.detection import is_german_erechnung_xml
-from paperless_ngx_erechnung.detection import is_xrechnung_xml
-from paperless_ngx_erechnung.detection import is_zugferd_pdf
+from paperless_ngx_erechnung.detection import looks_like_erechnung_xml
+from paperless_ngx_erechnung.detection import pdf_has_zugferd_attachment_name
+from paperless_ngx_erechnung.detection import validate_german_erechnung_xml
+from paperless_ngx_erechnung.detection import validate_zugferd_pdf
 from paperless_ngx_erechnung.extraction import InvoiceData
 from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
@@ -233,11 +236,19 @@ class XRechnungParser:
             return None
         # Capability probe: paperless-ngx's is_mime_type_supported() calls this
         # with path=None to ask "can anyone handle this MIME type?". Answer yes
-        # so the upload validator accepts the file; content validation runs on
-        # the real dispatch call (path is set).
+        # so the upload validator accepts the file; content validation runs in
+        # parse() on the real dispatch call.
         if path is None:
             return _WIN_SCORE
-        if not is_xrechnung_xml(path):
+        # Sniff only — claim anything that looks like a UBL/CII invoice so
+        # parse() can raise a precise ErechnungValidationError if it isn't
+        # actually a valid German E-Rechnung. Without claiming, the user
+        # only ever sees "Unsupported mime type" from consumer.py.
+        try:
+            head = path.read_bytes()[:8192]
+        except OSError:
+            return None
+        if not looks_like_erechnung_xml(head):
             return None
         return _WIN_SCORE
 
@@ -294,6 +305,11 @@ class XRechnungParser:
         except OSError as exc:
             msg = f"Could not read XRechnung file: {exc}"
             raise ParseError(msg) from exc
+
+        try:
+            validate_german_erechnung_xml(xml_bytes)
+        except ErechnungValidationError as exc:
+            raise ParseError(str(exc)) from exc
 
         self._invoice = extract_invoice_fields(xml_bytes)
 
@@ -438,7 +454,11 @@ class ZUGFeRDParser:
         # See XRechnungParser.score for the path-None rationale.
         if path is None:
             return _WIN_SCORE
-        if not is_zugferd_pdf(path):
+        # Sniff only — claim any PDF that embeds a spec-named attachment so
+        # parse() can raise a precise reason if the attachment turns out to
+        # be missing / unreadable / non-conformant. Plain PDFs fall through
+        # to the built-in Tesseract parser.
+        if not pdf_has_zugferd_attachment_name(path):
             return None
         return _WIN_SCORE
 
@@ -491,15 +511,16 @@ class ZUGFeRDParser:
             msg = f"ZUGFeRD source file not found: {document_path}"
             raise ParseError(msg)
 
-        # Extract embedded XML and build InvoiceData from it.
-        xml_bytes = _read_zugferd_embedded_xml(document_path)
-        if xml_bytes is None:
-            logger.warning(
-                "No embedded XML found in %s; falling back to PDF text only.",
-                document_path,
-            )
-        else:
-            self._invoice = extract_invoice_fields(xml_bytes)
+        # Validate the embedded XML strictly here so any failure surfaces in
+        # the UI with a useful message ("no attachment", "embedded XML
+        # malformed at line X", "profile URN not accepted", ...). score()
+        # already confirmed an attachment with a spec name exists.
+        try:
+            xml_bytes = validate_zugferd_pdf(document_path)
+        except ErechnungValidationError as exc:
+            raise ParseError(str(exc)) from exc
+
+        self._invoice = extract_invoice_fields(xml_bytes)
 
         if produce_archive:
             # Pass-through: copy the input verbatim so the Factur-X

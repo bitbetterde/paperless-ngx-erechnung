@@ -47,7 +47,71 @@ def test_score_advertises_capability_without_path() -> None:
 def test_score_returns_none_for_non_xrechnung_xml(tmp_path: Path) -> None:
     f = tmp_path / "boring.xml"
     f.write_text("<root/>")
+    # Sniff doesn't see a UBL/CII namespace marker → score declines without
+    # claiming, so an unrelated XML file falls through to paperless's
+    # "no parser" path rather than producing one of our error messages.
     assert XRechnungParser.score("application/xml", "boring.xml", f) is None
+
+
+# Real-world malformed pattern: the CII root namespace is intact (so the
+# sniff sees the marker), but the ram: namespace URI was hard-wrapped at
+# column 80 by a buggy producer — XML normalises the embedded LF to a
+# space, leaving an invalid URI. Reproduces the bug we saw on a customer file.
+_BROKEN_RAM_NS_XML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b"<rsm:CrossIndustryInvoice\n"
+    b'xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"\n'
+    b'xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformat\n'
+    b'ionEntity:100"/>'
+)
+
+
+def test_score_claims_files_with_invoice_namespace_even_when_invalid(
+    tmp_path: Path,
+) -> None:
+    """Sniff is loose so parse() can raise specific error messages.
+
+    A file mentioning the CII namespace but otherwise malformed must be
+    *claimed* — paperless will then call parse() and surface our specific
+    ErechnungValidationError instead of "Unsupported mime type".
+    """
+    f = tmp_path / "broken.xml"
+    f.write_bytes(_BROKEN_RAM_NS_XML)
+    score = XRechnungParser.score("application/xml", "broken.xml", f)
+    assert score is not None and score > 10
+
+
+def test_parse_raises_parse_error_with_line_column_for_malformed_xml(
+    tmp_path: Path,
+) -> None:
+    from documents.parsers import ParseError  # noqa: PLC0415
+
+    f = tmp_path / "broken.xml"
+    f.write_bytes(_BROKEN_RAM_NS_XML)
+    with XRechnungParser() as parser, pytest.raises(ParseError) as excinfo:
+        parser.parse(f, "application/xml", produce_archive=False)
+    msg = str(excinfo.value)
+    assert "XML parse error" in msg
+    assert "line " in msg and "column " in msg
+
+
+def test_parse_raises_parse_error_for_generic_en16931(tmp_path: Path) -> None:
+    from documents.parsers import ParseError  # noqa: PLC0415
+
+    f = tmp_path / "generic.xml"
+    f.write_text(
+        """<?xml version="1.0"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:CustomizationID>urn:cen.eu:en16931:2017</cbc:CustomizationID>
+</Invoice>
+""",
+    )
+    with XRechnungParser() as parser, pytest.raises(ParseError) as excinfo:
+        parser.parse(f, "application/xml", produce_archive=False)
+    msg = str(excinfo.value)
+    assert "urn:cen.eu:en16931:2017" in msg
+    assert "xrechnung" in msg.lower()
 
 
 def test_score_wins_for_xrechnung(ubl_invoice_path: Path) -> None:
@@ -87,7 +151,9 @@ def test_extract_metadata_from_disk(ubl_invoice_path: Path) -> None:
     assert "issue_date" in keys
     assert "total_amount" in keys
     # All entries share our namespace.
-    assert all(e["namespace"] == "urn:paperless-ngx-erechnung:xrechnung" for e in entries)
+    assert all(
+        e["namespace"] == "urn:paperless-ngx-erechnung:xrechnung" for e in entries
+    )
     assert all(e["prefix"] == "erechnung" for e in entries)
 
 
