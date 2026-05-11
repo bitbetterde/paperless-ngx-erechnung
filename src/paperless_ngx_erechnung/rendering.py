@@ -6,12 +6,46 @@ Pipeline:
 1. **Normalize** — KoSIT XSLT (``ubl-invoice-xr.xsl`` /
    ``ubl-creditnote-xr.xsl`` / ``cii-xr.xsl``) collapses the two source
    syntaxes into KoSIT's intermediate "XR" XML.
-2. **Render** — ``xrechnung-html.xsl`` produces HTML.
+2. **Render** — ``xrechnung-html.xsl`` produces HTML, which we then
+   post-process with a small print stylesheet (see ``_PRINT_STYLESHEET``).
 3. **PDF** — WeasyPrint converts that HTML to a PDF.
 
 Both XSLT stages need an XSLT 2.0 processor; we use ``saxonche`` (Saxon-HE
 bundled as a native binary, no JRE). The processor is created lazily so
 import-time cost stays cheap when the parser isn't actually used.
+
+Why HTML, not KoSIT's PDF stylesheet?
+-------------------------------------
+KoSIT ships a second renderer, ``xr-pdf.xsl``, that goes straight from XR
+to PDF. Tempting — but it emits **XSL-FO**, the W3C formatting-objects
+language, and is meant to be processed by **Apache FOP** or Antenna House
+XSL Formatter. Both are JVM applications. Adopting the FO path would mean:
+
+- shipping a JRE inside the Paperless-ngx container (no Java today —
+  ``saxonche`` is a native Saxon build that does not need a JVM),
+- adding ~80 MB to the image and a long-running FOP process for every
+  consumed invoice, or wrapping the Antenna House commercial formatter,
+- maintaining a second rendering toolchain alongside the HTML viewer.
+
+The HTML viewer is the path most other consumer-side tools use and is what
+KoSIT publishes for browser display. The catch: the viewer is *interactive*
+— it has a tab navigation that requires JavaScript and four of five tab
+panels start hidden (``class="divHide"`` with ``display: none``). Each
+hidden panel also contains a ``<noscript>`` block reading
+"Inhalte auf dieser Seite sind ohne JavaScript nur eingeschränkt
+darstellbar." WeasyPrint never executes JS, so a naïve HTML→PDF conversion
+gives a PDF with dead tab buttons and the JS-required warning in place of
+4/5 of the invoice.
+
+We solve that by injecting a tiny print-mode stylesheet at the WeasyPrint
+stage (see ``_PRINT_STYLESHEET``) that:
+
+- hides the ``.menue`` nav, ``<noscript>`` and ``<script>`` elements,
+- forces ``.divHide`` to ``display: block`` so all sections print,
+- sets A4 page geometry.
+
+Result: zero extra runtime dependencies, the whole invoice prints, and we
+keep using the renderer that gets the most upstream attention.
 """
 
 from __future__ import annotations
@@ -149,10 +183,39 @@ def _xml_to_html(xml_bytes: bytes, normalizer_filename: str) -> bytes:
 # --------------------------------------------------------------------------- #
 
 
+# KoSIT's xrechnung-html.xsl produces a browser-oriented *viewer*:
+#   - a tab navigation that needs JavaScript to switch panels;
+#   - 4 of 5 sections start with `class="divHide"` (display:none) so without
+#     JS only the overview is visible;
+#   - a `<noscript>` block inside each section that reads "Inhalte auf dieser
+#     Seite sind ohne JavaScript nur eingeschränkt darstellbar."
+# WeasyPrint never runs JS, so naïvely converting that HTML gives a PDF
+# containing dead tab buttons and the JS-warning text. The print sheet below
+# (a) hides the interactive chrome, (b) unfolds all tab panels so the full
+# invoice prints, and (c) gives the page sane A4 margins.
+_PRINT_STYLESHEET = """
+@page { size: A4; margin: 1.8cm 1.5cm; }
+
+/* Hide the interactive viewer chrome — irrelevant in a print rendition. */
+.menue, .menue *,
+noscript,
+script { display: none !important; }
+
+/* Unfold all tab panels so the whole document prints, not just the overview. */
+.divHide { display: block !important; }
+
+/* Keep section headers with their content rather than orphaning them. */
+h1, h2, h3, h4 { page-break-after: avoid; }
+"""
+
+
 def _html_to_pdf(html: bytes, out_pdf: Path) -> None:
     """Write *html* to *out_pdf* as a PDF using WeasyPrint."""
     # Lazy import — WeasyPrint imports pango/cairo bindings at module load.
-    from weasyprint import HTML
+    from weasyprint import CSS, HTML
 
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
-    HTML(string=html.decode("utf-8")).write_pdf(target=str(out_pdf))
+    HTML(string=html.decode("utf-8")).write_pdf(
+        target=str(out_pdf),
+        stylesheets=[CSS(string=_PRINT_STYLESHEET)],
+    )

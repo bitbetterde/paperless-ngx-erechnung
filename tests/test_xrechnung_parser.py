@@ -200,6 +200,45 @@ def test_full_parse_produces_archive_and_text(ubl_invoice_path: Path) -> None:
 
 
 @needs_rendering
+def test_rendered_pdf_has_no_javascript_warning_or_tab_buttons(
+    ubl_invoice_path: Path,
+) -> None:
+    """Print-mode CSS must suppress the KoSIT viewer chrome.
+
+    Without the print stylesheet, the archive PDF contains:
+      - the German "JavaScript required" notice from <noscript>,
+      - dead tab buttons (Übersicht / Details / Zusätze / Anlagen / Laufzettel),
+    because WeasyPrint can't execute the viewer's JavaScript.
+    """
+    import pypdfium2 as pdfium  # noqa: PLC0415
+
+    with XRechnungParser() as parser:
+        parser.parse(ubl_invoice_path, "application/xml")
+        archive = parser.get_archive_path()
+        assert archive is not None and archive.is_file()
+
+        # Extract text from every page and concatenate.
+        doc = pdfium.PdfDocument(str(archive))
+        try:
+            page_text = "\n".join(
+                (page.get_textpage().get_text_range() or "") for page in doc
+            )
+        finally:
+            doc.close()
+
+    lowered = page_text.lower()
+    assert "javascript" not in lowered, (
+        "PDF still contains the <noscript> 'JavaScript required' notice."
+    )
+    # The four normally-hidden tabs are unfolded for print, so their content
+    # is in the PDF — but the *tab buttons themselves* should not be.
+    # The button-only labels are short German words; we test the rarest one.
+    assert "Laufzettel" not in page_text, (
+        "PDF still contains a viewer tab button label (Laufzettel)."
+    )
+
+
+@needs_rendering
 def test_parse_without_archive_skips_pdf(ubl_invoice_path: Path) -> None:
     with XRechnungParser() as parser:
         parser.parse(
