@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""End-to-end tests for XRechnungParser.
+
+The full ``parse()`` path renders an archive PDF via the vendored KoSIT
+XSLT and WeasyPrint. Those are heavy deps; tests that exercise them are
+gated on ``saxonche`` and ``weasyprint`` being importable.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from paperless_erechnung.parsers import XRechnungParser
+
+
+# --------------------------------------------------------------------------- #
+# Registry contract (no parse() needed)
+# --------------------------------------------------------------------------- #
+
+
+def test_required_class_attributes_present() -> None:
+    for attr in ("name", "version", "author", "url"):
+        value = getattr(XRechnungParser, attr)
+        assert isinstance(value, str) and value
+
+
+def test_supported_mime_types_covers_xml() -> None:
+    mimes = XRechnungParser.supported_mime_types()
+    assert "application/xml" in mimes
+    assert "text/xml" in mimes
+
+
+def test_score_returns_none_for_unsupported_mime() -> None:
+    assert XRechnungParser.score("application/pdf", "x.pdf") is None
+
+
+def test_score_returns_none_without_path() -> None:
+    assert XRechnungParser.score("application/xml", "x.xml") is None
+
+
+def test_score_returns_none_for_non_xrechnung_xml(tmp_path: Path) -> None:
+    f = tmp_path / "boring.xml"
+    f.write_text("<root/>")
+    assert XRechnungParser.score("application/xml", "boring.xml", f) is None
+
+
+def test_score_wins_for_xrechnung(ubl_invoice_path: Path) -> None:
+    score = XRechnungParser.score(
+        "application/xml",
+        "invoice.xml",
+        ubl_invoice_path,
+    )
+    # Built-in parsers score 10; we must outrank them.
+    assert score is not None and score > 10
+
+
+def test_properties() -> None:
+    parser = XRechnungParser()
+    assert parser.can_produce_archive is True
+    assert parser.requires_pdf_rendition is True
+
+
+def test_context_manager_cleans_up_tempdir() -> None:
+    with XRechnungParser() as p:
+        tempdir = p._tempdir  # noqa: SLF001
+        assert tempdir.is_dir()
+    assert not tempdir.is_dir()
+
+
+# --------------------------------------------------------------------------- #
+# extract_metadata (no archive PDF needed — pure parse path)
+# --------------------------------------------------------------------------- #
+
+
+def test_extract_metadata_from_disk(ubl_invoice_path: Path) -> None:
+    with XRechnungParser() as parser:
+        entries = parser.extract_metadata(ubl_invoice_path, "application/xml")
+
+    keys = {e["key"] for e in entries}
+    assert "invoice_number" in keys
+    assert "issue_date" in keys
+    assert "total_amount" in keys
+    # All entries share our namespace.
+    assert all(e["namespace"] == "urn:paperless-erechnung:xrechnung" for e in entries)
+    assert all(e["prefix"] == "erechnung" for e in entries)
+
+
+# --------------------------------------------------------------------------- #
+# Full parse() — heavy: saxonche + KoSIT XSLT + WeasyPrint
+# --------------------------------------------------------------------------- #
+
+
+def _rendering_available() -> tuple[bool, str]:
+    """Return (available, reason) for the heavy rendering stack."""
+    try:
+        import saxonche  # noqa: F401, PLC0415
+    except ImportError as exc:
+        return False, f"saxonche unavailable: {exc}"
+    try:
+        import weasyprint  # noqa: F401, PLC0415
+    except (ImportError, OSError) as exc:
+        # WeasyPrint also fails to import (OSError) when its native deps
+        # (pango, cairo, gdk-pixbuf) are missing from the system.
+        return False, f"weasyprint unavailable: {exc}"
+    return True, ""
+
+
+_RENDER_OK, _RENDER_REASON = _rendering_available()
+needs_rendering = pytest.mark.skipif(not _RENDER_OK, reason=_RENDER_REASON)
+
+
+@needs_rendering
+def test_full_parse_produces_archive_and_text(ubl_invoice_path: Path) -> None:
+    with XRechnungParser() as parser:
+        parser.parse(ubl_invoice_path, "application/xml")
+
+        archive = parser.get_archive_path()
+        text = parser.get_text()
+        date = parser.get_date()
+
+        assert archive is not None and archive.is_file()
+        assert archive.stat().st_size > 0
+        assert text is not None
+        # Key-value block must be present at the top of the searchable text.
+        assert "Invoice-Number: 1234567890" in text
+        assert "Currency: EUR" in text
+        assert date is not None and date.year == 2018
+
+
+@needs_rendering
+def test_parse_without_archive_skips_pdf(ubl_invoice_path: Path) -> None:
+    with XRechnungParser() as parser:
+        parser.parse(
+            ubl_invoice_path,
+            "application/xml",
+            produce_archive=False,
+        )
+        assert parser.get_archive_path() is None
+        # We still get the searchable key-value block.
+        text = parser.get_text()
+        assert text is not None and "Invoice-Number" in text
+
+
+@needs_rendering
+def test_thumbnail_after_parse(ubl_invoice_path: Path) -> None:
+    with XRechnungParser() as parser:
+        parser.parse(ubl_invoice_path, "application/xml")
+        thumb = parser.get_thumbnail(ubl_invoice_path, "application/xml")
+
+        assert thumb.is_file()
+        assert thumb.read_bytes()[:4] == b"RIFF"  # WebP magic
