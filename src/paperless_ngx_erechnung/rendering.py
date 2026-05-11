@@ -204,6 +204,10 @@ script { display: none !important; }
 /* Unfold all tab panels so the whole document prints, not just the overview. */
 .divHide { display: block !important; }
 
+/* The KoSIT viewer paints the body in its brand blue at 8% opacity — a UI
+   affordance that looks wrong on a printed invoice. Force a white page. */
+body { background: #fff !important; }
+
 /* Keep section headers with their content rather than orphaning them. */
 h1, h2, h3, h4 { page-break-after: avoid; }
 """
