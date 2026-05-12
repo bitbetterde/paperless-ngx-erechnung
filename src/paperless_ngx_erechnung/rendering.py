@@ -6,51 +6,35 @@ Pipeline:
 1. **Normalize** — KoSIT XSLT (``ubl-invoice-xr.xsl`` /
    ``ubl-creditnote-xr.xsl`` / ``cii-xr.xsl``) collapses the two source
    syntaxes into KoSIT's intermediate "XR" XML.
-2. **Render** — ``xrechnung-html.xsl`` produces HTML, which we then
-   post-process with a small print stylesheet (see ``_PRINT_STYLESHEET``).
-3. **PDF** — WeasyPrint converts that HTML to a PDF.
+2. **Render** — ``xr-pdf.xsl`` produces XSL-FO (Apache FOP / Antenna House
+   formatting objects), KoSIT's canonical PDF stylesheet.
+3. **PDF** — Apache FOP turns the XSL-FO into a PDF.
 
-Both XSLT stages need an XSLT 2.0 processor; we use ``saxonche`` (Saxon-HE
-bundled as a native binary, no JRE). The processor is created lazily so
-import-time cost stays cheap when the parser isn't actually used.
+The XSLT stages need an XSLT 2.0 processor; we use ``saxonche`` (Saxon-HE
+bundled as a native binary, no JRE). FOP itself is a JVM application; we
+shell out to the ``fop`` binary on PATH, which the Docker image
+installs alongside ``default-jre-headless``.
 
-Why HTML, not KoSIT's PDF stylesheet?
--------------------------------------
-KoSIT ships a second renderer, ``xr-pdf.xsl``, that goes straight from XR
-to PDF. Tempting — but it emits **XSL-FO**, the W3C formatting-objects
-language, and is meant to be processed by **Apache FOP** or Antenna House
-XSL Formatter. Both are JVM applications. Adopting the FO path would mean:
+Why FOP and not WeasyPrint (HTML route)?
+----------------------------------------
+KoSIT also ships ``xrechnung-html.xsl``, which targets an interactive
+browser viewer (tab navigation, JavaScript-driven panels). We tried that
+route with WeasyPrint and the resulting archive PDF was a degraded view
+of the invoice — viewer chrome leaked through, panels were hidden, the
+print stylesheet was an ongoing maintenance burden, and there is no path
+to PDF/A from a raster-leaning HTML renderer. ``xr-pdf.xsl`` is purpose-built
+for archive PDFs, ships from KoSIT, and is the stylesheet that produces
+the layout the spec authors actually intended.
 
-- shipping a JRE inside the Paperless-ngx container (no Java today —
-  ``saxonche`` is a native Saxon build that does not need a JVM),
-- adding ~80 MB to the image and a long-running FOP process for every
-  consumed invoice, or wrapping the Antenna House commercial formatter,
-- maintaining a second rendering toolchain alongside the HTML viewer.
-
-The HTML viewer is the path most other consumer-side tools use and is what
-KoSIT publishes for browser display. The catch: the viewer is *interactive*
-— it has a tab navigation that requires JavaScript and four of five tab
-panels start hidden (``class="divHide"`` with ``display: none``). Each
-hidden panel also contains a ``<noscript>`` block reading
-"Inhalte auf dieser Seite sind ohne JavaScript nur eingeschränkt
-darstellbar." WeasyPrint never executes JS, so a naïve HTML→PDF conversion
-gives a PDF with dead tab buttons and the JS-required warning in place of
-4/5 of the invoice.
-
-We solve that by injecting a tiny print-mode stylesheet at the WeasyPrint
-stage (see ``_PRINT_STYLESHEET``) that:
-
-- hides the ``.menue`` nav, ``<noscript>`` and ``<script>`` elements,
-- forces ``.divHide`` to ``display: block`` so all sections print,
-- sets A4 page geometry.
-
-Result: zero extra runtime dependencies, the whole invoice prints, and we
-keep using the renderer that gets the most upstream attention.
+The price is a JRE in the container image. We pay it.
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 from lxml import etree
@@ -72,8 +56,13 @@ _NORMALIZER_FOR_ROOT: dict[str, str] = {
     "CrossIndustryInvoice": "cii-xr.xsl",
 }
 
-# Stage 2 stylesheet (XR -> HTML).
-_HTML_STYLESHEET = "xrechnung-html.xsl"
+# Stage 2 stylesheet (XR -> XSL-FO).
+_PDF_STYLESHEET = "xr-pdf.xsl"
+
+# How long FOP may run before we give up — KoSIT's FO for a typical invoice
+# is ~130 KB; 120s is comfortably generous on the modest CPUs Paperless
+# typically runs on and short enough to fail fast on a hang.
+_FOP_TIMEOUT_SECONDS = 120
 
 
 class RenderingNotConfiguredError(RuntimeError):
@@ -85,6 +74,15 @@ class RenderingNotConfiguredError(RuntimeError):
     """
 
 
+class FopNotAvailableError(RuntimeError):
+    """Raised when the ``fop`` binary cannot be found on PATH.
+
+    Apache FOP is an external dependency installed by the Docker image
+    (``default-jre-headless`` + ``fop``). Local development needs it on
+    PATH as well — see the README's Development section.
+    """
+
+
 def render_xrechnung_to_pdf(xml_bytes: bytes, out_pdf: Path) -> None:
     """Render *xml_bytes* (an XRechnung document) to a PDF at *out_pdf*.
 
@@ -92,41 +90,17 @@ def render_xrechnung_to_pdf(xml_bytes: bytes, out_pdf: Path) -> None:
     ------
     RenderingNotConfiguredError
         If the KoSIT XSLT files have not been vendored.
+    FopNotAvailableError
+        If the ``fop`` binary is not on PATH.
     RuntimeError
         If any stage of the transform fails.
     """
     stylesheet = _select_normalizer(xml_bytes)
     _ensure_xslt_present(stylesheet)
-    _ensure_xslt_present(_HTML_STYLESHEET)
+    _ensure_xslt_present(_PDF_STYLESHEET)
 
-    html = _xml_to_html(xml_bytes, stylesheet)
-    html = _strip_duplicate_disclaimers(html)
-    _html_to_pdf(html, out_pdf)
-
-
-def _strip_duplicate_disclaimers(html: bytes) -> bytes:
-    """Keep only the first ``<div class="haftungausschluss">``.
-
-    KoSIT's viewer puts the same "Wir übernehmen keine Haftung für die
-    Richtigkeit der Daten." block at the top of every tab panel — fine in
-    the interactive viewer where only one panel shows at a time, but in our
-    print rendition (all panels unfolded) the text repeats four times.
-
-    Pure CSS can't express "first occurrence across different parents", so
-    we do this as a tiny DOM pass before WeasyPrint sees the document.
-    """
-    from lxml import html as lxml_html  # noqa: PLC0415
-
-    doc = lxml_html.fromstring(html)
-    discs = doc.xpath(
-        '//div[contains(concat(" ", normalize-space(@class), " "), '
-        '" haftungausschluss ")]',
-    )
-    for extra in discs[1:]:
-        parent = extra.getparent()
-        if parent is not None:
-            parent.remove(extra)
-    return lxml_html.tostring(doc, encoding="utf-8")
+    fo_bytes = _xml_to_fo(xml_bytes, stylesheet)
+    _fo_to_pdf(fo_bytes, out_pdf)
 
 
 # --------------------------------------------------------------------------- #
@@ -158,20 +132,18 @@ def _ensure_xslt_present(filename: str) -> None:
         raise RenderingNotConfiguredError(msg)
 
 
-def _xml_to_html(xml_bytes: bytes, normalizer_filename: str) -> bytes:
-    """Run the two XSLT 2.0 stages: input XML -> XR -> HTML.
+def _xml_to_fo(xml_bytes: bytes, normalizer_filename: str) -> bytes:
+    """Run the two XSLT 2.0 stages: input XML -> XR -> XSL-FO.
 
     ``saxonche.transform_to_string`` accepts a ``source_file`` path rather
     than an in-memory string, so each stage's input is staged through a
     temp file. The files are cleaned up via the surrounding TemporaryDirectory.
     """
     # Import lazily — saxonche pulls a ~40 MB native binary at first import.
-    import tempfile
-
     from saxonche import PySaxonProcessor
 
     normalizer_path = str(_XSLT_DIR / normalizer_filename)
-    html_path = str(_XSLT_DIR / _HTML_STYLESHEET)
+    pdf_xsl_path = str(_XSLT_DIR / _PDF_STYLESHEET)
 
     with tempfile.TemporaryDirectory(prefix="paperless-ngx-erechnung-render-") as tmp:
         src_path = Path(tmp) / "input.xml"
@@ -192,69 +164,66 @@ def _xml_to_html(xml_bytes: bytes, normalizer_filename: str) -> bytes:
             xr_path = Path(tmp) / "xr.xml"
             xr_path.write_text(stage1, encoding="utf-8")
 
-            # Stage 2: XR -> HTML
+            # Stage 2: XR -> XSL-FO
             stage2 = xslt.transform_to_string(
                 source_file=str(xr_path),
-                stylesheet_file=html_path,
+                stylesheet_file=pdf_xsl_path,
             )
             if stage2 is None:
-                msg = "KoSIT HTML stage produced no output."
+                msg = "KoSIT PDF stage produced no XSL-FO output."
                 raise RuntimeError(msg)
 
             return stage2.encode("utf-8")
 
 
 # --------------------------------------------------------------------------- #
-# Stage 3: HTML -> PDF via WeasyPrint
+# Stage 3: XSL-FO -> PDF via Apache FOP
 # --------------------------------------------------------------------------- #
 
 
-# KoSIT's xrechnung-html.xsl produces a browser-oriented *viewer*:
-#   - a tab navigation that needs JavaScript to switch panels;
-#   - 4 of 5 sections start with `class="divHide"` (display:none) so without
-#     JS only the overview is visible;
-#   - a `<noscript>` block inside each section that reads "Inhalte auf dieser
-#     Seite sind ohne JavaScript nur eingeschränkt darstellbar."
-# WeasyPrint never runs JS, so naïvely converting that HTML gives a PDF
-# containing dead tab buttons and the JS-warning text. The print sheet below
-# (a) hides the interactive chrome, (b) unfolds all tab panels so the full
-# invoice prints, and (c) gives the page sane A4 margins.
-_PRINT_STYLESHEET = """
-@page { size: A4; margin: 1.8cm 1.5cm; }
+def _fo_to_pdf(fo_bytes: bytes, out_pdf: Path) -> None:
+    """Write *fo_bytes* (XSL-FO) to *out_pdf* as a PDF using Apache FOP.
 
-/* Hide the interactive viewer chrome — irrelevant in a print rendition. */
-.menue, .menue *,
-noscript,
-script { display: none !important; }
-
-/* Unfold all tab panels so the whole document prints, not just the overview. */
-.divHide { display: block !important; }
-
-/* The KoSIT viewer paints the body in its brand blue at 8% opacity — a UI
-   affordance that looks wrong on a printed invoice. Force a white page. */
-body { background: #fff !important; }
-
-/* Keep section headers with their content rather than orphaning them.
-   KoSIT uses div-based pseudo-headings (.boxtitel is the blue title bar,
-   .boxtitelSub is the lighter sub-title), so real h1..h4 isn't enough. */
-h1, h2, h3, h4,
-.boxtitel, .boxtitelSub { page-break-after: avoid; }
-
-/* Keep label/value groups (a "box" — e.g. the Käufer or Verkäufer card)
-   on a single page where they fit. WeasyPrint treats this as a hint:
-   over-sized boxes will still break across pages, but small ones won't
-   be split needlessly. */
-.box { page-break-inside: avoid; }
-"""
-
-
-def _html_to_pdf(html: bytes, out_pdf: Path) -> None:
-    """Write *html* to *out_pdf* as a PDF using WeasyPrint."""
-    # Lazy import — WeasyPrint imports pango/cairo bindings at module load.
-    from weasyprint import CSS, HTML
+    Shells out to the ``fop`` binary, which the Docker image installs
+    alongside a headless JRE. FOP reads the FO from a temp file (its CLI
+    does support ``-fo -`` for stdin in newer releases, but Debian's ``fop``
+    package still ships a wrapper that doesn't, so a tempfile is the
+    cross-platform path).
+    """
+    fop_bin = shutil.which("fop")
+    if fop_bin is None:
+        msg = (
+            "Apache FOP binary not found on PATH. In the Docker image, "
+            "ensure the `fop` package is installed (the Dockerfile adds it "
+            "via apt). For local development, install it via your package "
+            "manager: `brew install fop` on macOS, `apt install fop` on "
+            "Debian/Ubuntu."
+        )
+        raise FopNotAvailableError(msg)
 
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
-    HTML(string=html.decode("utf-8")).write_pdf(
-        target=str(out_pdf),
-        stylesheets=[CSS(string=_PRINT_STYLESHEET)],
-    )
+
+    with tempfile.TemporaryDirectory(prefix="paperless-ngx-erechnung-fop-") as tmp:
+        fo_path = Path(tmp) / "input.fo"
+        fo_path.write_bytes(fo_bytes)
+
+        try:
+            proc = subprocess.run(
+                [fop_bin, "-fo", str(fo_path), "-pdf", str(out_pdf)],
+                capture_output=True,
+                timeout=_FOP_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            msg = f"Apache FOP timed out after {_FOP_TIMEOUT_SECONDS}s rendering XSL-FO to PDF."
+            raise RuntimeError(msg) from exc
+
+        if proc.returncode != 0 or not out_pdf.is_file():
+            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+            stdout = proc.stdout.decode("utf-8", errors="replace").strip()
+            detail = stderr or stdout or "no diagnostic output"
+            msg = (
+                f"Apache FOP failed (exit {proc.returncode}) rendering XSL-FO "
+                f"to PDF: {detail}"
+            )
+            raise RuntimeError(msg)

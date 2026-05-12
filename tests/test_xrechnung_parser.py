@@ -2,8 +2,8 @@
 """End-to-end tests for XRechnungParser.
 
 The full ``parse()`` path renders an archive PDF via the vendored KoSIT
-XSLT and WeasyPrint. Those are heavy deps; tests that exercise them are
-gated on ``saxonche`` and ``weasyprint`` being importable.
+XSLT and Apache FOP. Those are heavy deps; tests that exercise them are
+gated on ``saxonche`` importing and the ``fop`` binary being on PATH.
 """
 
 from __future__ import annotations
@@ -158,22 +158,20 @@ def test_extract_metadata_from_disk(ubl_invoice_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Full parse() — heavy: saxonche + KoSIT XSLT + WeasyPrint
+# Full parse() — heavy: saxonche + KoSIT XSLT + Apache FOP
 # --------------------------------------------------------------------------- #
 
 
 def _rendering_available() -> tuple[bool, str]:
     """Return (available, reason) for the heavy rendering stack."""
+    import shutil  # noqa: PLC0415
+
     try:
         import saxonche  # noqa: F401, PLC0415
     except ImportError as exc:
         return False, f"saxonche unavailable: {exc}"
-    try:
-        import weasyprint  # noqa: F401, PLC0415
-    except (ImportError, OSError) as exc:
-        # WeasyPrint also fails to import (OSError) when its native deps
-        # (pango, cairo, gdk-pixbuf) are missing from the system.
-        return False, f"weasyprint unavailable: {exc}"
+    if shutil.which("fop") is None:
+        return False, "Apache FOP binary not on PATH (install: brew/apt install fop)"
     return True, ""
 
 
@@ -200,15 +198,12 @@ def test_full_parse_produces_archive_and_text(ubl_invoice_path: Path) -> None:
 
 
 @needs_rendering
-def test_rendered_pdf_has_no_javascript_warning_or_tab_buttons(
-    ubl_invoice_path: Path,
-) -> None:
-    """Print-mode CSS must suppress the KoSIT viewer chrome.
+def test_rendered_pdf_contains_invoice_fields(ubl_invoice_path: Path) -> None:
+    """The KoSIT FO pipeline must land core invoice fields on the page.
 
-    Without the print stylesheet, the archive PDF contains:
-      - the German "JavaScript required" notice from <noscript>,
-      - dead tab buttons (Übersicht / Details / Zusätze / Anlagen / Laufzettel),
-    because WeasyPrint can't execute the viewer's JavaScript.
+    This is a smoke test for end-to-end correctness: if FOP silently
+    drops content (as some FO bugs do), the invoice number and currency
+    won't appear in the extractable text and we want to fail loudly.
     """
     import pypdfium2 as pdfium  # noqa: PLC0415
 
@@ -217,7 +212,6 @@ def test_rendered_pdf_has_no_javascript_warning_or_tab_buttons(
         archive = parser.get_archive_path()
         assert archive is not None and archive.is_file()
 
-        # Extract text from every page and concatenate.
         doc = pdfium.PdfDocument(str(archive))
         try:
             page_text = "\n".join(
@@ -226,23 +220,10 @@ def test_rendered_pdf_has_no_javascript_warning_or_tab_buttons(
         finally:
             doc.close()
 
-    lowered = page_text.lower()
-    assert "javascript" not in lowered, (
-        "PDF still contains the <noscript> 'JavaScript required' notice."
-    )
-    # The four normally-hidden tabs are unfolded for print, so their content
-    # is in the PDF — but the *tab buttons themselves* should not be.
-    # The button-only labels are short German words; we test the rarest one.
-    assert "Laufzettel" not in page_text, (
-        "PDF still contains a viewer tab button label (Laufzettel)."
-    )
-    # KoSIT prints the same disclaimer at the top of each unfolded tab
-    # panel. _strip_duplicate_disclaimers() collapses them to one.
-    disclaimer_fragment = "übernehmen keine Haftung"
-    assert page_text.count(disclaimer_fragment) <= 1, (
-        f"Disclaimer appears {page_text.count(disclaimer_fragment)} times; "
-        "_strip_duplicate_disclaimers should leave at most one."
-    )
+    # The UBL fixture's invoice number and currency must show up in the
+    # rendered PDF; absence of either means a content-dropping rendering bug.
+    assert "1234567890" in page_text, "Invoice number not present in rendered PDF text."
+    assert "EUR" in page_text, "Currency code not present in rendered PDF text."
 
 
 @needs_rendering

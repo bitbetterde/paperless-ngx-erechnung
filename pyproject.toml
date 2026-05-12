@@ -32,9 +32,12 @@ dependencies = [
     "pikepdf>=9.0",
     "pypdfium2>=4.0",
     "saxonche>=12.0",
-    "weasyprint>=62.0",
     "Pillow>=10.0",
 ]
+# XSL-FO -> PDF rendering uses Apache FOP, which we shell out to. It's
+# installed by the Dockerfile and must be on PATH for local development
+# (`brew install fop` / `apt install fop`). Not a Python package, so it
+# does not appear in `dependencies` above.
 
 [dependency-groups]
 dev = [

@@ -34,7 +34,7 @@ defaults for matching files without affecting anything else.
 
 - Archive PDF rendering for XRechnung via the official KoSIT
   [XRechnung-Visualization](https://github.com/itplr-kosit/xrechnung-visualization)
-  XSLT (HTML stage) plus WeasyPrint (HTML → PDF).
+  XSLT (`xr-pdf.xsl`) plus Apache FOP (XSL-FO → PDF).
 - Pass-through archive for ZUGFeRD PDFs (preserves PDF/A-3 conformance and
   the Factur-X signature).
 - Extracted invoice fields (number, date, due date, seller, totals, …)
@@ -66,32 +66,19 @@ look for `Loaded third-party parser 'XRechnung' …` in the logs.
 
 ## Development
 
-WeasyPrint renders archive PDFs via Pango/Cairo, which are not bundled in
-the wheel and must be present as system libraries. On macOS:
+Archive PDF rendering shells out to **Apache FOP**, which needs a JRE.
+The Dockerfile installs both (`default-jre-headless` + `fop`). For local
+development, install via your package manager:
 
 ```bash
-brew install pango
-# pulls in cairo, harfbuzz, gdk-pixbuf, fontconfig, glib, libffi
+brew install fop          # macOS — pulls in openjdk
+apt install fop           # Debian/Ubuntu — pulls in default-jre-headless
 ```
 
-WeasyPrint resolves these libraries by SONAME (e.g. `libgobject-2.0-0`),
-which macOS's loader doesn't find under `/opt/homebrew/lib` by default.
-Export the prefix once in your shell rc:
-
-```bash
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
-```
-
-Without this, the WeasyPrint-dependent tests skip with
-`cannot load library 'libgobject-2.0-0'` instead of running.
-
-On Debian/Ubuntu the equivalent system install is
-`apt install libpango-1.0-0 libpangoft2-1.0-0` (no `DYLD_*` needed). See
-WeasyPrint's
-[installation docs](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#installation)
-for other platforms. All other runtime dependencies (qpdf for pikepdf,
-libxml2/libxslt for lxml, libpdfium, Saxon-HE native libs, Pillow) are
-bundled in their respective wheels and need no system install.
+The XSLT-dependent rendering tests skip if the `fop` binary is not on
+PATH. All other runtime dependencies (qpdf for pikepdf, libxml2/libxslt
+for lxml, libpdfium, Saxon-HE native libs, Pillow) are bundled in their
+respective wheels and need no system install.
 
 Then:
 
