@@ -10,6 +10,8 @@ Handles the two formats produced by the German B2B E-Rechnung mandate and makes 
 - **XRechnung** — pure XML invoice (UBL Invoice, UBL CreditNote, or UN/CEFACT CII).
 - **ZUGFeRD / Factur-X** — hybrid PDF/A-3 with an embedded XML invoice.
 
+![Paperless-ngx showing an XRechnung invoice with extracted metadata in the sidebar and the rendered archive PDF in the main view](paperless-ngx-erechnung.png)
+
 ## How it plugs in
 
 Paperless-ngx exposes a parser plugin framework that scans the `paperless_ngx.parsers` Python entry-point group on startup (see `paperless/parsers/registry.py` in paperless-ngx). This package declares two parsers under that group:
@@ -64,6 +66,10 @@ Then:
 uv sync
 uv run pytest
 ```
+
+## AI Disclaimer
+
+This plugin was developed with the help of an AI Agent (Claude Code). However, it was not "vibecoded" (as in "a human did not look at or understand this code") or "one-shotted". Every line of this code was reviewed by a capable developer and the whole project is tested, refined and documented by real humans.
 
 ## License
 
