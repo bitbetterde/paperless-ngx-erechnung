@@ -43,11 +43,65 @@ Built-in parsers score `10`; this plugin scores `100`, so it cleanly outranks de
 
 ## Installation
 
-```bash
-pip install paperless-ngx-erechnung
+Unfortunately, installing this plugin is more than a single click and depends very much on your setup. Two pieces need to land in Paperless-ngx's runtime environment:
+
+1. The Python package itself, installed into the same interpreter Paperless runs under, so its `paperless_ngx.parsers` entry-points are discovered at startup.
+2. **Apache FOP** + a headless **JRE**, available on `PATH`, so the XRechnung → archive PDF stage works.
+
+Once both are in place, Paperless picks up the parsers at startup — look for `Loaded third-party parser 'XRechnung' …` in the logs to confirm succesful installation.
+
+### Docker / Docker Compose
+
+The upstream image ships neither FOP nor this plugin, so we need to extend it with a small `Dockerfile` next to your `docker-compose.yml`:
+
+```dockerfile
+FROM ghcr.io/paperless-ngx/paperless-ngx:beta
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        default-jre-headless fop \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir paperless-ngx-erechnung
+USER paperless
 ```
 
-Inside the Paperless-ngx Docker image, mount the package in or build a custom image that adds the install step. Paperless picks the plugin up at startup — look for `Loaded third-party parser 'XRechnung' …` in the logs.
+Now you can build this modified image with:
+
+```bash
+docker build -t paperless-ngx-erechnung:latest .
+```
+
+Then point your `webserver` service at the tagged image instead of the upstream one:
+
+```yaml
+services:
+  webserver:
+    image: paperless-ngx-erechnung:latest
+    # ...keep the rest of your existing config (env, volumes, depends_on, ...)
+```
+
+And restart Paperless to pick up the new image:
+
+```bash
+docker compose up -d
+```
+
+(Or, if you prefer to let Compose handle the build, set `build: .` on the service instead of `image:` and run `docker compose build webserver && docker compose up -d`.)
+
+### Bare-metal
+
+If Paperless-ngx runs directly on the host, install Apache FOP and a JRE via the system package manager, then install the plugin into the same Python environment Paperless uses (commonly a venv under `/opt/paperless/`). Paths and service names depend on how you provisioned Paperless — substitute yours:
+
+```bash
+# System-side: FOP + JRE
+sudo apt install default-jre-headless fop          # Debian/Ubuntu
+
+# Plugin into Paperless's Python environment
+sudo -u paperless /opt/paperless/.venv/bin/pip install paperless-ngx-erechnung
+
+# Restart so the entry-point group is rescanned
+sudo systemctl restart paperless-webserver paperless-consumer paperless-scheduler
+```
 
 ## Development
 
