@@ -44,6 +44,11 @@ logger = logging.getLogger("paperless_ngx_erechnung.rendering")
 
 _XSLT_DIR = Path(__file__).parent / "xslt"
 
+# FOP configuration registering the vendored Source Serif Pro font that the
+# KoSIT stylesheet names via font-family="SourceSerifPro". Without `-c`, FOP
+# silently substitutes a base-14 fallback (Times-Roman).
+_FOP_CONFIG = _XSLT_DIR / "conf" / "fop.xconf"
+
 # Source-syntax -> normalizer stylesheet (stage 1).
 _NORMALIZER_FOR_ROOT: dict[str, str] = {
     "{urn:oasis:names:specification:ubl:schema:xsd:Invoice-2}Invoice": (
@@ -181,6 +186,28 @@ def _xml_to_fo(xml_bytes: bytes, normalizer_filename: str) -> bytes:
 # --------------------------------------------------------------------------- #
 
 
+def _materialize_fop_config(tmp_dir: Path) -> Path | None:
+    """Stage a FOP config in *tmp_dir* with absolute font ``embed-url`` paths.
+
+    FOP resolves relative ``embed-url`` URIs against the input FO file's
+    directory, not the config file's. Since we write the FO into a tempdir,
+    the upstream ``fonts/...`` paths would fail to resolve. We rewrite them
+    to absolute ``file:`` URIs pointing at the vendored TTFs. Returns None
+    if the vendored config is missing (FOP then runs unconfigured and
+    silently substitutes a base-14 fallback for SourceSerifPro).
+    """
+    if not _FOP_CONFIG.is_file():
+        return None
+    fonts_dir = (_FOP_CONFIG.parent / "fonts").resolve()
+    text = _FOP_CONFIG.read_text(encoding="utf-8")
+    rewritten = text.replace(
+        'embed-url="fonts/', f'embed-url="{fonts_dir.as_uri()}/'
+    )
+    staged = tmp_dir / "fop.xconf"
+    staged.write_text(rewritten, encoding="utf-8")
+    return staged
+
+
 def _fo_to_pdf(fo_bytes: bytes, out_pdf: Path) -> None:
     """Write *fo_bytes* (XSL-FO) to *out_pdf* as a PDF using Apache FOP.
 
@@ -207,9 +234,15 @@ def _fo_to_pdf(fo_bytes: bytes, out_pdf: Path) -> None:
         fo_path = Path(tmp) / "input.fo"
         fo_path.write_bytes(fo_bytes)
 
+        cmd = [fop_bin]
+        runtime_config = _materialize_fop_config(Path(tmp))
+        if runtime_config is not None:
+            cmd += ["-c", str(runtime_config)]
+        cmd += ["-fo", str(fo_path), "-pdf", str(out_pdf)]
+
         try:
             proc = subprocess.run(
-                [fop_bin, "-fo", str(fo_path), "-pdf", str(out_pdf)],
+                cmd,
                 capture_output=True,
                 timeout=_FOP_TIMEOUT_SECONDS,
                 check=False,
