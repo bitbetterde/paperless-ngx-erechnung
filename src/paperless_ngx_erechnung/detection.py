@@ -46,11 +46,21 @@ _CII_NSMAP = {"rsm": _NS_CII, "ram": _NS_RAM}
 # XRechnung is the German CIUS. Factur-X/ZUGFeRD profiles below EN16931
 # (MINIMUM, BASIC WL, BASIC) are intentionally not accepted here.
 _XRECHNUNG_PROFILE_MARKER = "xrechnung"
-_FACTUR_X_EN16931_PROFILE_MARKERS = frozenset(
+
+# The EN 16931 (COMFORT) profile is identified by the bare CEN URN with no
+# vendor suffix. In CII / Factur-X this is the canonical identifier of a
+# valid German E-Rechnung, so it is accepted on the CII path. In UBL the same
+# value just means "generic EN16931" rather than the German XRechnung CIUS,
+# so _require_ubl_xrechnung_profile deliberately does not accept it.
+_CII_EN16931_COMFORT_PROFILE = "urn:cen.eu:en16931:2017"
+
+# EXTENDED is a superset of EN16931. Its real-world profile URN is a composite
+# that wraps the Factur-X/ZUGFeRD spec URN, e.g.
+# ``urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended``, so these
+# markers are matched as substrings.
+_FACTUR_X_EXTENDED_PROFILE_MARKERS = frozenset(
     {
-        "urn:factur-x.eu:1p0:en16931",
         "urn:factur-x.eu:1p0:extended",
-        "urn:zugferd.de:2p0:en16931",
         "urn:zugferd.de:2p0:extended",
     },
 )
@@ -276,19 +286,22 @@ def _require_cii_german_erechnung_profile(root: etree._Element) -> None:
         )
         raise ErechnungValidationError(msg)
 
-    accepted: list[str] = []
+    declined: list[str] = []
     for value in ids:
         normalized = value.strip().lower()
         if _XRECHNUNG_PROFILE_MARKER in normalized:
             return
-        if normalized in _FACTUR_X_EN16931_PROFILE_MARKERS:
+        if normalized == _CII_EN16931_COMFORT_PROFILE:
             return
-        accepted.append(value.strip())
+        if any(marker in normalized for marker in _FACTUR_X_EXTENDED_PROFILE_MARKERS):
+            return
+        declined.append(value.strip())
 
-    sample = accepted[0] if accepted else "<empty>"
+    sample = declined[0] if declined else "<empty>"
     msg = (
         f"Not a German E-Rechnung: profile URN {sample!r} is not accepted "
-        f"(expected XRechnung CIUS or Factur-X/ZUGFeRD EN16931+/EXTENDED; "
-        f"sub-EN16931 profiles like BASIC and MINIMUM are intentionally declined)."
+        f"(expected XRechnung CIUS or Factur-X/ZUGFeRD EN16931 (COMFORT)/EXTENDED; "
+        f"sub-EN16931 profiles like BASIC, BASIC WL and MINIMUM are intentionally "
+        f"declined)."
     )
     raise ErechnungValidationError(msg)
