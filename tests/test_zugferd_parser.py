@@ -189,11 +189,16 @@ def test_parse_raises_for_stub_attachment(tmp_path: Path) -> None:
     assert "Unexpected XML root" in msg
 
 
-def test_parse_raises_for_generic_en16931_attachment(tmp_path: Path) -> None:
+def test_parse_raises_for_sub_en16931_attachment(tmp_path: Path) -> None:
+    """A sub-EN16931 profile (MINIMUM) is declined with the URN in the message.
+
+    The bare EN16931 URN is now accepted (COMFORT profile), so this exercises
+    a genuinely non-conformant profile to confirm the failure still surfaces.
+    """
     from documents.parsers import ParseError  # provided by the test shim
     import pikepdf  # noqa: PLC0415
 
-    generic_cii = (
+    minimum_cii = (
         b'<?xml version="1.0"?>\n'
         b"<rsm:CrossIndustryInvoice\n"
         b'xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"\n'
@@ -201,7 +206,7 @@ def test_parse_raises_for_generic_en16931_attachment(tmp_path: Path) -> None:
         b'ReusableAggregateBusinessInformationEntity:100">'
         b"<rsm:ExchangedDocumentContext>"
         b"<ram:GuidelineSpecifiedDocumentContextParameter>"
-        b"<ram:ID>urn:cen.eu:en16931:2017</ram:ID>"
+        b"<ram:ID>urn:factur-x.eu:1p0:minimum</ram:ID>"
         b"</ram:GuidelineSpecifiedDocumentContextParameter>"
         b"</rsm:ExchangedDocumentContext>"
         b"</rsm:CrossIndustryInvoice>"
@@ -211,15 +216,15 @@ def test_parse_raises_for_generic_en16931_attachment(tmp_path: Path) -> None:
     pdf.add_blank_page(page_size=(595, 842))
     pdf.attachments["factur-x.xml"] = pikepdf.AttachedFileSpec(
         pdf,
-        generic_cii,
+        minimum_cii,
         filename="factur-x.xml",
         mime_type="text/xml",
         relationship=pikepdf.Name("/Alternative"),
     )
-    out = tmp_path / "generic.pdf"
+    out = tmp_path / "minimum.pdf"
     pdf.save(str(out))
 
     with ZUGFeRDParser() as parser, pytest.raises(ParseError) as excinfo:
         parser.parse(out, "application/pdf", produce_archive=False)
     msg = str(excinfo.value)
-    assert "urn:cen.eu:en16931:2017" in msg
+    assert "urn:factur-x.eu:1p0:minimum" in msg

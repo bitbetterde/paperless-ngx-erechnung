@@ -47,8 +47,9 @@ def test_rejects_generic_ubl_invoice_without_xrechnung_profile(tmp_path: Path) -
     assert not is_xrechnung_xml(f)
 
 
-def test_rejects_cii_invoice_without_german_profile(tmp_path: Path) -> None:
-    f = tmp_path / "generic-cii.xml"
+def test_accepts_cii_invoice_with_comfort_profile(tmp_path: Path) -> None:
+    """The bare EN16931 URN is the CII COMFORT profile — a valid E-Rechnung."""
+    f = tmp_path / "comfort-cii.xml"
     f.write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
 <rsm:CrossIndustryInvoice
@@ -57,6 +58,25 @@ def test_rejects_cii_invoice_without_german_profile(tmp_path: Path) -> None:
   <rsm:ExchangedDocumentContext>
     <ram:GuidelineSpecifiedDocumentContextParameter>
       <ram:ID>urn:cen.eu:en16931:2017</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+</rsm:CrossIndustryInvoice>
+""",
+    )
+    assert is_xrechnung_xml(f)
+
+
+def test_rejects_cii_invoice_with_sub_en16931_profile(tmp_path: Path) -> None:
+    """A sub-EN16931 profile (here MINIMUM) is not a valid German E-Rechnung."""
+    f = tmp_path / "minimum-cii.xml"
+    f.write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice
+  xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+  xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:factur-x.eu:1p0:minimum</ram:ID>
     </ram:GuidelineSpecifiedDocumentContextParameter>
   </rsm:ExchangedDocumentContext>
 </rsm:CrossIndustryInvoice>
@@ -152,8 +172,8 @@ def test_rejects_zugferd_with_invalid_xml_attachment(tmp_path: Path) -> None:
     assert not is_zugferd_pdf(out)
 
 
-def test_rejects_zugferd_with_generic_cii_attachment(tmp_path: Path) -> None:
-    """CII syntax with a generic EN16931 identifier is not enough to win."""
+def test_accepts_zugferd_with_comfort_cii_attachment(tmp_path: Path) -> None:
+    """A Factur-X PDF carrying the EN16931 (COMFORT) profile is a valid match."""
     pikepdf = pytest.importorskip("pikepdf")
     pdf = pikepdf.Pdf.new()
     pdf.add_blank_page(page_size=(595, 842))
@@ -176,7 +196,36 @@ def test_rejects_zugferd_with_generic_cii_attachment(tmp_path: Path) -> None:
     )
     pdf.attachments["factur-x.xml"] = attachment
 
-    out = tmp_path / "generic-cii.pdf"
+    out = tmp_path / "comfort-cii.pdf"
+    pdf.save(str(out))
+    assert is_zugferd_pdf(out)
+
+
+def test_rejects_zugferd_with_sub_en16931_cii_attachment(tmp_path: Path) -> None:
+    """A sub-EN16931 profile (MINIMUM) must not win — it's only a booking aid."""
+    pikepdf = pytest.importorskip("pikepdf")
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page(page_size=(595, 842))
+    attachment = pikepdf.AttachedFileSpec(
+        pdf,
+        b"""<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice
+  xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+  xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:factur-x.eu:1p0:minimum</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+</rsm:CrossIndustryInvoice>
+""",
+        filename="factur-x.xml",
+        mime_type="text/xml",
+        relationship=pikepdf.Name("/Alternative"),
+    )
+    pdf.attachments["factur-x.xml"] = attachment
+
+    out = tmp_path / "minimum-cii.pdf"
     pdf.save(str(out))
     assert not is_zugferd_pdf(out)
 
@@ -374,6 +423,37 @@ def test_validate_cii_with_basic_profile_explains() -> None:
     msg = str(excinfo.value)
     assert "urn:factur-x.eu:1p0:basic" in msg
     assert "EN16931" in msg or "MINIMUM" in msg or "BASIC" in msg
+
+
+@pytest.mark.parametrize(
+    "profile_id",
+    [
+        # EN16931 (COMFORT) — the bare CEN URN with no vendor suffix.
+        "urn:cen.eu:en16931:2017",
+        # Real-world composite URNs that wrap the Factur-X/ZUGFeRD spec URN.
+        "urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended",
+        "urn:cen.eu:en16931:2017#conformant#urn:zugferd.de:2p0:extended",
+    ],
+)
+def test_validate_cii_en16931_and_extended_profiles_accepted(profile_id: str) -> None:
+    """Factur-X/ZUGFeRD COMFORT and EXTENDED are valid German E-Rechnungen.
+
+    EXTENDED uses a composite profile URN — see issue #2.
+    """
+    xml = (
+        b'<?xml version="1.0"?>\n'
+        b"<rsm:CrossIndustryInvoice\n"
+        b'xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"\n'
+        b'xmlns:ram="urn:un:unece:uncefact:data:standard:'
+        b'ReusableAggregateBusinessInformationEntity:100">'
+        b"<rsm:ExchangedDocumentContext>"
+        b"<ram:GuidelineSpecifiedDocumentContextParameter>"
+        b"<ram:ID>" + profile_id.encode() + b"</ram:ID>"
+        b"</ram:GuidelineSpecifiedDocumentContextParameter>"
+        b"</rsm:ExchangedDocumentContext>"
+        b"</rsm:CrossIndustryInvoice>"
+    )
+    validate_german_erechnung_xml(xml)  # no exception
 
 
 def test_validate_valid_invoice_does_not_raise(cii_invoice_bytes: bytes) -> None:
