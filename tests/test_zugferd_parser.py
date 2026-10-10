@@ -102,6 +102,9 @@ def test_parse_extracts_metadata_and_archive(zugferd_pdf: Path) -> None:
         assert text is not None
         assert "Invoice-Number: RR123456" in text
         assert "Currency: EUR" in text
+        # Every field of the embedded XML is listed, not just the curated ones.
+        assert "ExchangedDocument/ID: RR123456" in text
+        assert "SellerTradeParty/PostalTradeAddress" in text
         assert date is not None and date.year == 2016
 
 
