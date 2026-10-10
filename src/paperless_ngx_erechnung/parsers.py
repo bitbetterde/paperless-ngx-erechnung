@@ -34,6 +34,7 @@ from paperless_ngx_erechnung.detection import pdf_has_zugferd_attachment_name
 from paperless_ngx_erechnung.detection import validate_german_erechnung_xml
 from paperless_ngx_erechnung.detection import validate_zugferd_pdf
 from paperless_ngx_erechnung.extraction import InvoiceData
+from paperless_ngx_erechnung.extraction import extract_all_fields
 from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
 if TYPE_CHECKING:
@@ -103,6 +104,18 @@ def _searchable_text_block(data: InvoiceData) -> str:
             continue
         lines.append(f"{label}: {value}")
     return "\n".join(lines)
+
+
+def _all_fields_text_block(xml_bytes: bytes) -> str:
+    """Format every populated field of the invoice XML as ``Path: Value`` lines.
+
+    Complements :func:`_searchable_text_block`, which only covers the
+    curated header fields: this makes line items, addresses, payment
+    details, notes etc. visible and searchable as well.
+    """
+    return "\n".join(
+        f"{path}: {value}" for path, value in extract_all_fields(xml_bytes)
+    )
 
 
 def _metadata_entries(data: InvoiceData, namespace: str) -> list[MetadataEntry]:
@@ -531,7 +544,10 @@ class ZUGFeRDParser:
 
         body_text = _extract_pdf_text(document_path)
         kv = _searchable_text_block(self._invoice)
-        parts = [p for p in (kv, body_text) if p]
+        # The visual PDF is free-form and need not show everything the
+        # embedded XML carries, so list all of its fields explicitly.
+        all_fields = _all_fields_text_block(xml_bytes)
+        parts = [p for p in (kv, all_fields, body_text) if p]
         self._text = "\n\n".join(parts) if parts else None
 
     # --- accessors ----------------------------------------------------------

@@ -114,6 +114,58 @@ def extract_invoice_fields(xml_bytes: bytes) -> InvoiceData:
     return InvoiceData()
 
 
+def extract_all_fields(xml_bytes: bytes) -> list[tuple[str, str]]:
+    """Return every populated leaf element of *xml_bytes* as ``(path, value)``.
+
+    Unlike :func:`extract_invoice_fields` this is syntax-agnostic: it walks
+    the whole tree in document order and yields one entry per element that
+    carries text or attributes, keyed by its slash-joined local-name path
+    below the root (e.g. ``ExchangedDocument/ID``). Attributes such as
+    ``currencyID`` / ``unitCode`` are appended to the value in parentheses.
+    Repeated elements (invoice lines, tax breakdowns) yield repeated keys.
+
+    Returns an empty list when the XML cannot be parsed.
+    """
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError as exc:
+        logger.warning("Could not parse invoice XML: %s", exc)
+        return []
+
+    fields: list[tuple[str, str]] = []
+    _collect_leaves(root, "", fields)
+    return fields
+
+
+def _collect_leaves(
+    element: etree._Element,
+    path: str,
+    out: list[tuple[str, str]],
+) -> None:
+    # Comments and processing instructions have a non-string tag.
+    children = [c for c in element if isinstance(c.tag, str)]
+    if children:
+        for child in children:
+            name = etree.QName(child).localname
+            _collect_leaves(child, f"{path}/{name}" if path else name, out)
+        return
+    if not path:
+        return
+
+    # Embedded attachments are base64 blobs — keep their attributes
+    # (filename, mimeCode) but never dump the payload into the text index.
+    is_binary = path.endswith("BinaryObject")
+    text = "" if is_binary else " ".join((element.text or "").split())
+    attrs = ", ".join(
+        f"{etree.QName(key).localname}={value}"
+        for key, value in element.attrib.items()
+    )
+    if attrs:
+        text = f"{text} ({attrs})" if text else f"({attrs})"
+    if text:
+        out.append((path, text))
+
+
 # --------------------------------------------------------------------------- #
 # UBL extractor (Invoice + CreditNote)
 # --------------------------------------------------------------------------- #

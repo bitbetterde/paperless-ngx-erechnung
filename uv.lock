@@ -253,7 +253,7 @@ wheels = [
 
 [[package]]
 name = "paperless-ngx-erechnung"
-version = "0.1.0.dev0"
+version = "0.1.3"
 source = { editable = "." }
 dependencies = [
     { name = "lxml" },

@@ -7,6 +7,7 @@ import datetime
 from decimal import Decimal
 
 from paperless_ngx_erechnung.extraction import InvoiceData
+from paperless_ngx_erechnung.extraction import extract_all_fields
 from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
 
@@ -109,6 +110,43 @@ def test_missing_fields_yield_none() -> None:
     assert data.invoice_number is None
     assert data.total_amount is None
     assert data == InvoiceData()
+
+
+# --------------------------------------------------------------------------- #
+# Generic all-fields dump
+# --------------------------------------------------------------------------- #
+
+
+def test_all_fields_covers_every_leaf(cii_invoice_bytes: bytes) -> None:
+    fields = extract_all_fields(cii_invoice_bytes)
+    paths = [path for path, _ in fields]
+
+    assert ("ExchangedDocument/ID", "RR123456") in fields
+    # Fields outside the curated InvoiceData set show up too.
+    assert any("SellerTradeParty/PostalTradeAddress" in p for p in paths)
+    assert any("IncludedSupplyChainTradeLineItem" in p for p in paths)
+    # The root element name is not part of the path.
+    assert not any(p.startswith("CrossIndustryInvoice") for p in paths)
+
+
+def test_all_fields_appends_attributes_and_skips_binary() -> None:
+    xml = (
+        b'<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2">'
+        b"<!-- comment -->"
+        b'<Total currencyID="EUR"> 12.50 </Total>'
+        b"<Empty/>"
+        b'<Attachment><EmbeddedDocumentBinaryObject filename="a.pdf">'
+        b"QUJD</EmbeddedDocumentBinaryObject></Attachment>"
+        b"</Invoice>"
+    )
+    assert extract_all_fields(xml) == [
+        ("Total", "12.50 (currencyID=EUR)"),
+        ("Attachment/EmbeddedDocumentBinaryObject", "(filename=a.pdf)"),
+    ]
+
+
+def test_all_fields_invalid_xml_returns_empty() -> None:
+    assert extract_all_fields(b"not valid xml") == []
 
 
 def test_as_dict_skips_none_fields() -> None:
