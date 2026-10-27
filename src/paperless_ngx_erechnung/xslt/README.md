@@ -6,7 +6,7 @@ stylesheets (Apache-2.0).
 
 ## Pinned version
 
-**Vendored from upstream tag `v2026-01-31`** (compatible with XRechnung 3.0.x).
+**Vendored from upstream tag `v2026-10-13`** (compatible with XRechnung 3.0.x).
 See `VENDORED_VERSION.txt` for the exact commit.
 
 To re-vendor / bump:
@@ -16,7 +16,7 @@ cd /tmp
 rm -rf xrechnung-visualization
 git clone https://github.com/itplr-kosit/xrechnung-visualization.git
 cd xrechnung-visualization
-git checkout <TAG>     # e.g. v2026-01-31
+git checkout <TAG>     # e.g. v2026-10-13
 cp -R src/xsl/. <this-dir>/
 cp -R conf <this-dir>/conf
 cp LICENSE <this-dir>/LICENSE
