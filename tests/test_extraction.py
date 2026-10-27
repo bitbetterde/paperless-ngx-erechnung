@@ -6,8 +6,10 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 
+from paperless_ngx_erechnung.extraction import BusinessTerm
 from paperless_ngx_erechnung.extraction import InvoiceData
 from paperless_ngx_erechnung.extraction import extract_all_fields
+from paperless_ngx_erechnung.extraction import extract_business_terms
 from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
 
@@ -147,6 +149,69 @@ def test_all_fields_appends_attributes_and_skips_binary() -> None:
 
 def test_all_fields_invalid_xml_returns_empty() -> None:
     assert extract_all_fields(b"not valid xml") == []
+
+
+def test_all_fields_skips_covered_subtrees_by_indexed_key() -> None:
+    xml = (
+        b'<r:Invoice xmlns:r="urn:x">'
+        b"<r:ID>1</r:ID>"
+        b"<r:Note><r:Text>a</r:Text></r:Note>"
+        b"<r:Note><r:Text>b</r:Text></r:Note>"
+        b'<r:Qty unit="H87">3</r:Qty>'
+        b"</r:Invoice>"
+    )
+    # Index only where same-named siblings exist, as KoSIT's xr:src does.
+    assert extract_all_fields(xml, skip={"/Invoice/ID", "/Invoice/Note[2]"}) == [
+        ("Note/Text", "a"),
+        ("Qty", "3 (unit=H87)"),
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# EN 16931 business terms (KoSIT XR)
+# --------------------------------------------------------------------------- #
+
+_XR_NS = "urn:ce.eu:en16931:2017:xoev-de:kosit:standard:xrechnung-1"
+
+
+def test_business_terms_flatten_groups_and_label() -> None:
+    xr = (
+        f'<xr:invoice xmlns:xr="{_XR_NS}">'
+        '<xr:Invoice_number xr:id="BT-1" xr:src="/rsm:CII/rsm:Doc/ram:ID">'
+        "R1</xr:Invoice_number>"
+        '<xr:SELLER xr:id="BG-4" xr:src="/rsm:CII/ram:Seller">'
+        '<xr:Seller_identifier xr:id="BT-29" scheme_identifier="0088"'
+        ' xr:src="/rsm:CII/ram:Seller/ram:ID[2]">4000</xr:Seller_identifier>'
+        "</xr:SELLER>"
+        '<xr:Invoice_note xr:id="BT-22"> </xr:Invoice_note>'
+        "</xr:invoice>"
+    ).encode()
+    assert extract_business_terms(xr) == [
+        BusinessTerm("BT-1", "Invoice number", "Rechnungsnummer", "R1", "/CII/Doc/ID"),
+        BusinessTerm(
+            "BT-29",
+            "Seller identifier",
+            "Kennung",
+            "4000 (scheme_identifier=0088)",
+            "/CII/Seller/ID[2]",
+        ),
+    ]
+
+
+def test_business_terms_attribute_source_maps_to_owner_element() -> None:
+    xr = (
+        f'<xr:invoice xmlns:xr="{_XR_NS}">'
+        '<xr:Invoiced_quantity_unit_of_measure_code xr:id="BT-130"'
+        ' xr:src="/rsm:CII/ram:Line[1]/ram:Qty/@unitCode">H87'
+        "</xr:Invoiced_quantity_unit_of_measure_code>"
+        "</xr:invoice>"
+    ).encode()
+    [term] = extract_business_terms(xr)
+    assert term.src == "/CII/Line[1]/Qty"
+
+
+def test_business_terms_invalid_xml_returns_empty() -> None:
+    assert extract_business_terms(b"not valid xml") == []
 
 
 def test_as_dict_skips_none_fields() -> None:

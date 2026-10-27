@@ -194,6 +194,9 @@ def test_full_parse_produces_archive_and_text(ubl_invoice_path: Path) -> None:
         # Key-value block must be present at the top of the searchable text.
         assert "Invoice-Number: 1234567890" in text
         assert "Currency: EUR" in text
+        # Fields are findable by their EN 16931 business term ID.
+        assert "BT-12 Contract reference (Vertragsnummer): Vertragsreferenz" in text
+        assert "BT-73 Invoicing period start date (Von): 2018-10-01" in text
         assert date is not None and date.year == 2018
 
 

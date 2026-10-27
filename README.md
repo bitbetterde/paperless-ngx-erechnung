@@ -27,6 +27,7 @@ Built-in parsers score `10`; this plugin scores `100`, so it cleanly outranks de
 - Archive PDF rendering for XRechnung via the official KoSIT [XRechnung-Visualization](https://github.com/itplr-kosit/xrechnung-visualization) XSLT (`xr-pdf.xsl`) plus Apache FOP (XSL-FO → PDF).
 - Pass-through archive for ZUGFeRD PDFs (preserves PDF/A-3 conformance and the Factur-X signature).
 - Extracted invoice fields (number, date, due date, seller, totals, …) surfaced in Paperless's metadata sidebar and prepended to the searchable text body.
+- Every field of the invoice XML listed in the Content tab and full-text index, labelled with its EN 16931 business term ID (e.g. `BT-22 Invoice note (Bemerkung): …`), so fields can be found by their BT number. XML fields without a BT number (e.g. Factur-X EXTENDED extras) follow by their XML path.
 
 ## What this plugin does NOT do
 
