@@ -1,4 +1,4 @@
-FROM ghcr.io/paperless-ngx/paperless-ngx:beta
+FROM ghcr.io/paperless-ngx/paperless-ngx:latest
 
 USER root
 # Apache FOP renders KoSIT's xr-pdf.xsl output (XSL-FO) into the archive PDF.
