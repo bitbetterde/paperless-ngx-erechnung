@@ -54,7 +54,7 @@ Once both are in place, Paperless picks up the parsers at startup — look for `
 2. Create the following `Dockerfile` next to your preferred `docker-compose.(XYZ).yml`:
 
 ```dockerfile
-FROM ghcr.io/paperless-ngx/paperless-ngx:3.0
+FROM ghcr.io/paperless-ngx/paperless-ngx:latest
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
