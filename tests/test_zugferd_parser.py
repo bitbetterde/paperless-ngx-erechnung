@@ -102,10 +102,36 @@ def test_parse_extracts_metadata_and_archive(zugferd_pdf: Path) -> None:
         assert text is not None
         assert "Invoice-Number: RR123456" in text
         assert "Currency: EUR" in text
-        # Every field of the embedded XML is listed, not just the curated ones.
-        assert "ExchangedDocument/ID: RR123456" in text
-        assert "SellerTradeParty/PostalTradeAddress" in text
+        # Every field of the embedded XML is listed, not just the curated
+        # ones, labelled with its EN 16931 business term ID.
+        assert "BT-22 Invoice note (Bemerkung): Bemerkung 1" in text
+        assert "BT-37 Seller city (Ort): [Seller city]" in text
+        assert "BT-38 Seller post code (PLZ): 12345" in text
+        # Fields without a BT ID are still listed by their XML path; fields
+        # with one are not listed twice.
+        assert (
+            "ApplicableHeaderTradeSettlement/ApplicableTradeTax/TypeCode: VAT" in text
+        )
+        assert "ExchangedDocument/ID: RR123456" not in text
         assert date is not None and date.year == 2016
+
+
+def test_parse_falls_back_to_xml_paths_without_bt_mapping(
+    zugferd_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from paperless_ngx_erechnung import rendering  # noqa: PLC0415
+
+    def broken(xml_bytes: bytes) -> bytes:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rendering, "normalize_to_xr", broken)
+    with ZUGFeRDParser() as parser:
+        parser.parse(zugferd_pdf, "application/pdf", produce_archive=False)
+        text = parser.get_text()
+        assert text is not None
+        assert "BT-" not in text
+        assert "ExchangedDocument/ID: RR123456" in text
 
 
 def test_parse_without_archive_skips_copy(zugferd_pdf: Path) -> None:

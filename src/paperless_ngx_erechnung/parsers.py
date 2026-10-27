@@ -33,8 +33,10 @@ from paperless_ngx_erechnung.detection import looks_like_erechnung_xml
 from paperless_ngx_erechnung.detection import pdf_has_zugferd_attachment_name
 from paperless_ngx_erechnung.detection import validate_german_erechnung_xml
 from paperless_ngx_erechnung.detection import validate_zugferd_pdf
+from paperless_ngx_erechnung.extraction import BusinessTerm
 from paperless_ngx_erechnung.extraction import InvoiceData
 from paperless_ngx_erechnung.extraction import extract_all_fields
+from paperless_ngx_erechnung.extraction import extract_business_terms
 from paperless_ngx_erechnung.extraction import extract_invoice_fields
 
 if TYPE_CHECKING:
@@ -107,15 +109,50 @@ def _searchable_text_block(data: InvoiceData) -> str:
 
 
 def _all_fields_text_block(xml_bytes: bytes) -> str:
-    """Format every populated field of the invoice XML as ``Path: Value`` lines.
+    """List every populated field of the invoice XML, one per line.
 
     Complements :func:`_searchable_text_block`, which only covers the
     curated header fields: this makes line items, addresses, payment
     details, notes etc. visible and searchable as well.
+
+    Fields defined by EN 16931 come first, labelled with their business
+    term ID so they can be found by it (``BT-22 Invoice note (Bemerkung):
+    …``). Everything else in the XML (e.g. Factur-X EXTENDED extras)
+    follows as ``Path: Value`` lines.
     """
-    return "\n".join(
-        f"{path}: {value}" for path, value in extract_all_fields(xml_bytes)
+    terms = _business_terms(xml_bytes)
+    bt_block = "\n".join(_format_business_term(t) for t in terms)
+    rest_block = "\n".join(
+        f"{path}: {value}"
+        for path, value in extract_all_fields(
+            xml_bytes,
+            skip={t.src for t in terms if t.src},
+        )
     )
+    return "\n\n".join(b for b in (bt_block, rest_block) if b)
+
+
+def _business_terms(xml_bytes: bytes) -> list[BusinessTerm]:
+    """Map *xml_bytes* to EN 16931 business terms via the KoSIT normalizer.
+
+    Returns an empty list if the transform fails; the caller then falls
+    back to listing raw XML paths only.
+    """
+    from paperless_ngx_erechnung.rendering import normalize_to_xr  # noqa: PLC0415
+
+    try:
+        xr_bytes = normalize_to_xr(xml_bytes)
+    except Exception as exc:
+        logger.warning("Could not map invoice XML to EN 16931 terms: %s", exc)
+        return []
+    return extract_business_terms(xr_bytes)
+
+
+def _format_business_term(term: BusinessTerm) -> str:
+    label = f"{term.bt_id} {term.name}"
+    if term.label_de:
+        label += f" ({term.label_de})"
+    return f"{label}: {term.value}"
 
 
 def _metadata_entries(data: InvoiceData, namespace: str) -> list[MetadataEntry]:
@@ -345,9 +382,11 @@ class XRechnungParser:
             body_text = ""
 
         # Prepend the key-value block so it's always at the top of the
-        # full-text index.
+        # full-text index. The full field list adds BT IDs, which the
+        # rendered PDF does not print.
         kv = _searchable_text_block(self._invoice)
-        parts = [p for p in (kv, body_text) if p]
+        all_fields = _all_fields_text_block(xml_bytes)
+        parts = [p for p in (kv, all_fields, body_text) if p]
         self._text = "\n\n".join(parts) if parts else None
 
     # --- accessors ----------------------------------------------------------

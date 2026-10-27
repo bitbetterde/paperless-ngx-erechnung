@@ -16,11 +16,14 @@ and BASIC WL Factur-X profiles legitimately omit several fields.
 from __future__ import annotations
 
 import datetime
+import functools
 import logging
+from collections.abc import Collection
 from dataclasses import asdict
 from dataclasses import dataclass
 from decimal import Decimal
 from decimal import InvalidOperation
+from pathlib import Path
 
 from lxml import etree
 
@@ -47,6 +50,14 @@ _NS_UDT = "urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100"
 
 _UBL_NSMAP = {"cac": _NS_CAC, "cbc": _NS_CBC}
 _CII_NSMAP = {"rsm": _NS_CII, "ram": _NS_RAM, "udt": _NS_UDT}
+
+# KoSIT's intermediate "XR" format (output of the stage-1 normalizer XSLT).
+_NS_XR = "urn:ce.eu:en16931:2017:xoev-de:kosit:standard:xrechnung-1"
+_XR_ID = f"{{{_NS_XR}}}id"
+_XR_SRC = f"{{{_NS_XR}}}src"
+
+# German field labels shipped with the KoSIT visualization.
+_L10N_DE = Path(__file__).parent / "xslt" / "l10n" / "de.xml"
 
 
 # --------------------------------------------------------------------------- #
@@ -83,6 +94,19 @@ class InvoiceData:
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class BusinessTerm:
+    """One EN 16931 business term (BT) value from a KoSIT XR document."""
+
+    bt_id: str  # "BT-22"
+    name: str  # "Invoice note"
+    label_de: str | None  # "Bemerkung"
+    value: str
+    # Source node this value came from, as a path of local names with
+    # positional indices; see _source_key().
+    src: str | None
+
+
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
@@ -114,7 +138,10 @@ def extract_invoice_fields(xml_bytes: bytes) -> InvoiceData:
     return InvoiceData()
 
 
-def extract_all_fields(xml_bytes: bytes) -> list[tuple[str, str]]:
+def extract_all_fields(
+    xml_bytes: bytes,
+    skip: Collection[str] = (),
+) -> list[tuple[str, str]]:
     """Return every populated leaf element of *xml_bytes* as ``(path, value)``.
 
     Unlike :func:`extract_invoice_fields` this is syntax-agnostic: it walks
@@ -123,6 +150,10 @@ def extract_all_fields(xml_bytes: bytes) -> list[tuple[str, str]]:
     below the root (e.g. ``ExchangedDocument/ID``). Attributes such as
     ``currencyID`` / ``unitCode`` are appended to the value in parentheses.
     Repeated elements (invoice lines, tax breakdowns) yield repeated keys.
+
+    Elements whose source key (see :attr:`BusinessTerm.src`) is in *skip*
+    are left out together with their descendants — used to drop fields
+    already listed as business terms.
 
     Returns an empty list when the XML cannot be parsed.
     """
@@ -133,21 +164,116 @@ def extract_all_fields(xml_bytes: bytes) -> list[tuple[str, str]]:
         return []
 
     fields: list[tuple[str, str]] = []
-    _collect_leaves(root, "", fields)
+    root_key = "/" + etree.QName(root).localname
+    _collect_leaves(root, "", root_key, fields, frozenset(skip))
     return fields
+
+
+def extract_business_terms(xr_bytes: bytes) -> list[BusinessTerm]:
+    """Return every populated business term of a KoSIT XR document.
+
+    *xr_bytes* is the output of the KoSIT normalizer XSLT
+    (:func:`paperless_ngx_erechnung.rendering.normalize_to_xr`), in which
+    every value is tagged with its EN 16931 ID (``BT-…``). Group elements
+    (``BG-…``) are flattened away. Returns an empty list when the XML
+    cannot be parsed.
+    """
+    try:
+        root = etree.fromstring(xr_bytes)
+    except etree.XMLSyntaxError as exc:
+        logger.warning("Could not parse KoSIT XR XML: %s", exc)
+        return []
+
+    labels = _german_labels()
+    terms: list[BusinessTerm] = []
+    for element in root.iter(f"{{{_NS_XR}}}*"):
+        bt_id = element.get(_XR_ID)
+        if not bt_id or any(isinstance(c.tag, str) for c in element):
+            continue
+        value = " ".join((element.text or "").split())
+        attrs = ", ".join(
+            f"{etree.QName(key).localname}={val}"
+            for key, val in element.attrib.items()
+            if not key.startswith(f"{{{_NS_XR}}}")
+        )
+        if attrs:
+            value = f"{value} ({attrs})" if value else f"({attrs})"
+        if not value:
+            continue
+        local = etree.QName(element).localname
+        src = element.get(_XR_SRC)
+        terms.append(
+            BusinessTerm(
+                bt_id=bt_id,
+                name=local.replace("_", " "),
+                label_de=labels.get(local),
+                value=value,
+                src=_source_key(src) if src else None,
+            ),
+        )
+    return terms
+
+
+@functools.cache
+def _german_labels() -> dict[str, str]:
+    """Map XR element local names to KoSIT's German labels (``l10n/de.xml``)."""
+    try:
+        root = etree.parse(str(_L10N_DE)).getroot()
+    except (OSError, etree.XMLSyntaxError):
+        return {}
+    labels: dict[str, str] = {}
+    for entry in root.iter("entry"):
+        key = entry.get("key") or ""
+        text = " ".join((entry.text or "").split())
+        if key.startswith("xr:") and "/" not in key and text:
+            labels[key[3:]] = text
+    return labels
+
+
+def _source_key(src: str) -> str:
+    """Normalize a KoSIT ``xr:src`` XPath to the key used by _collect_leaves.
+
+    KoSIT writes ``/rsm:A/ram:B[2]/ram:C`` (prefixes as in the source
+    document, an index only where same-named siblings exist). We drop the
+    prefixes, and map an attribute (``…/@unitCode``) to its owner element.
+    """
+    steps = [s for s in src.split("/") if s]
+    if steps and steps[-1].startswith("@"):
+        steps.pop()
+    return "/" + "/".join(s.split(":", 1)[-1] for s in steps)
 
 
 def _collect_leaves(
     element: etree._Element,
     path: str,
+    src_key: str,
     out: list[tuple[str, str]],
+    skip: frozenset[str],
 ) -> None:
+    if src_key in skip:
+        return
     # Comments and processing instructions have a non-string tag.
     children = [c for c in element if isinstance(c.tag, str)]
     if children:
+        counts: dict[str, int] = {}
+        for child in children:
+            counts[child.tag] = counts.get(child.tag, 0) + 1
+        seen: dict[str, int] = {}
         for child in children:
             name = etree.QName(child).localname
-            _collect_leaves(child, f"{path}/{name}" if path else name, out)
+            # Same indexing rule as KoSIT's xr:src-path: only number
+            # elements that have same-named siblings.
+            step = name
+            if counts[child.tag] > 1:
+                seen[child.tag] = seen.get(child.tag, 0) + 1
+                step = f"{name}[{seen[child.tag]}]"
+            _collect_leaves(
+                child,
+                f"{path}/{name}" if path else name,
+                f"{src_key}/{step}",
+                out,
+                skip,
+            )
         return
     if not path:
         return
@@ -157,8 +283,7 @@ def _collect_leaves(
     is_binary = path.endswith("BinaryObject")
     text = "" if is_binary else " ".join((element.text or "").split())
     attrs = ", ".join(
-        f"{etree.QName(key).localname}={value}"
-        for key, value in element.attrib.items()
+        f"{etree.QName(key).localname}={value}" for key, value in element.attrib.items()
     )
     if attrs:
         text = f"{text} ({attrs})" if text else f"({attrs})"

@@ -137,48 +137,61 @@ def _ensure_xslt_present(filename: str) -> None:
         raise RenderingNotConfiguredError(msg)
 
 
-def _xml_to_fo(xml_bytes: bytes, normalizer_filename: str) -> bytes:
-    """Run the two XSLT 2.0 stages: input XML -> XR -> XSL-FO.
+def normalize_to_xr(xml_bytes: bytes) -> bytes:
+    """Run only stage 1: UBL / CII source XML -> KoSIT's intermediate XR XML.
+
+    In XR every value is an element tagged with its EN 16931 business term
+    (``xr:id="BT-22"``) and the XPath of the source node it came from
+    (``xr:src``). No FOP needed.
+
+    Raises
+    ------
+    RenderingNotConfiguredError
+        If the KoSIT XSLT files have not been vendored.
+    RuntimeError
+        If the root element is unknown or the transform fails.
+    """
+    stylesheet = _select_normalizer(xml_bytes)
+    _ensure_xslt_present(stylesheet)
+    return _xml_to_xr(xml_bytes, stylesheet)
+
+
+def _transform(source: bytes, stylesheet_filename: str, tmp: Path) -> str | None:
+    """Apply one vendored stylesheet to *source* via saxonche.
 
     ``saxonche.transform_to_string`` accepts a ``source_file`` path rather
-    than an in-memory string, so each stage's input is staged through a
-    temp file. The files are cleaned up via the surrounding TemporaryDirectory.
+    than an in-memory string, so the input is staged through a file in *tmp*.
     """
     # Import lazily — saxonche pulls a ~40 MB native binary at first import.
     from saxonche import PySaxonProcessor
 
-    normalizer_path = str(_XSLT_DIR / normalizer_filename)
-    pdf_xsl_path = str(_XSLT_DIR / _PDF_STYLESHEET)
+    src_path = tmp / f"{stylesheet_filename}.input.xml"
+    src_path.write_bytes(source)
+    with PySaxonProcessor(license=False) as proc:
+        return proc.new_xslt30_processor().transform_to_string(
+            source_file=str(src_path),
+            stylesheet_file=str(_XSLT_DIR / stylesheet_filename),
+        )
 
+
+def _xml_to_xr(xml_bytes: bytes, normalizer_filename: str) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="paperless-ngx-erechnung-xr-") as tmp:
+        xr = _transform(xml_bytes, normalizer_filename, Path(tmp))
+    if xr is None:
+        msg = "KoSIT normalizer stage produced no output."
+        raise RuntimeError(msg)
+    return xr.encode("utf-8")
+
+
+def _xml_to_fo(xml_bytes: bytes, normalizer_filename: str) -> bytes:
+    """Run the two XSLT 2.0 stages: input XML -> XR -> XSL-FO."""
+    xr = _xml_to_xr(xml_bytes, normalizer_filename)
     with tempfile.TemporaryDirectory(prefix="paperless-ngx-erechnung-render-") as tmp:
-        src_path = Path(tmp) / "input.xml"
-        src_path.write_bytes(xml_bytes)
-
-        with PySaxonProcessor(license=False) as proc:
-            xslt = proc.new_xslt30_processor()
-
-            # Stage 1: source XML -> XR
-            stage1 = xslt.transform_to_string(
-                source_file=str(src_path),
-                stylesheet_file=normalizer_path,
-            )
-            if stage1 is None:
-                msg = "KoSIT normalizer stage produced no output."
-                raise RuntimeError(msg)
-
-            xr_path = Path(tmp) / "xr.xml"
-            xr_path.write_text(stage1, encoding="utf-8")
-
-            # Stage 2: XR -> XSL-FO
-            stage2 = xslt.transform_to_string(
-                source_file=str(xr_path),
-                stylesheet_file=pdf_xsl_path,
-            )
-            if stage2 is None:
-                msg = "KoSIT PDF stage produced no XSL-FO output."
-                raise RuntimeError(msg)
-
-            return stage2.encode("utf-8")
+        fo = _transform(xr, _PDF_STYLESHEET, Path(tmp))
+    if fo is None:
+        msg = "KoSIT PDF stage produced no XSL-FO output."
+        raise RuntimeError(msg)
+    return fo.encode("utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -200,9 +213,7 @@ def _materialize_fop_config(tmp_dir: Path) -> Path | None:
         return None
     fonts_dir = (_FOP_CONFIG.parent / "fonts").resolve()
     text = _FOP_CONFIG.read_text(encoding="utf-8")
-    rewritten = text.replace(
-        'embed-url="fonts/', f'embed-url="{fonts_dir.as_uri()}/'
-    )
+    rewritten = text.replace('embed-url="fonts/', f'embed-url="{fonts_dir.as_uri()}/')
     staged = tmp_dir / "fop.xconf"
     staged.write_text(rewritten, encoding="utf-8")
     return staged
