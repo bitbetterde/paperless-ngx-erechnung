@@ -164,14 +164,20 @@ def test_extract_metadata_from_disk(ubl_invoice_path: Path) -> None:
 
 def _rendering_available() -> tuple[bool, str]:
     """Return (available, reason) for the heavy rendering stack."""
+    import os  # noqa: PLC0415
     import shutil  # noqa: PLC0415
+
+    from paperless_ngx_erechnung.rendering import FOP_URL_ENV  # noqa: PLC0415
 
     try:
         import saxonche  # noqa: F401, PLC0415
     except ImportError as exc:
         return False, f"saxonche unavailable: {exc}"
-    if shutil.which("fop") is None:
-        return False, "Apache FOP binary not on PATH (install: brew/apt install fop)"
+    if not os.environ.get(FOP_URL_ENV) and shutil.which("fop") is None:
+        return False, (
+            f"Apache FOP not available: set {FOP_URL_ENV} or put `fop` on PATH "
+            "(install: brew/apt install fop)"
+        )
     return True, ""
 
 

@@ -41,17 +41,66 @@ Built-in parsers score `10`; this plugin scores `100`, so it cleanly outranks de
 
 ## Installation
 
-Unfortunately, installing this plugin is more than a single click and depends very much on your setup. Two pieces need to land in Paperless-ngx's runtime environment:
+Unfortunately, installing this plugin is more than a single click and depends very much on your setup. Two pieces need to be in place:
 
 1. The Python package itself, installed into the same interpreter Paperless runs under, so its `paperless_ngx.parsers` entry-points are discovered at startup.
-2. **Apache FOP** + a headless Java **JRE**, available on `PATH`, so the XRechnung → archive PDF stage works.
+2. **Apache FOP**, which turns XRechnung invoices into archive PDFs. FOP is a Java application. It can run as a separate container next to Paperless (recommended for Docker), or as a local `fop` binary with a Java runtime.
 
-Once both are in place, Paperless picks up the parsers at startup — look for `Loaded third-party parser 'XRechnung' …` in the logs to confirm succesful installation.
+Once both are in place, Paperless picks up the parsers at startup — look for `Loaded third-party parser 'XRechnung' …` in the logs to confirm successful installation.
 
-### Docker / Docker Compose
+### Docker / Docker Compose (recommended)
 
-1. Set up Paperless-ngx with Docker Compose (e.g. by using [one of the official compose files](https://github.com/paperless-ngx/paperless-ngx/tree/main/docker/compose)). Since this upstream image ships neither FOP nor this plugin, we need to extend it with a small `Dockerfile`.
-2. Create the following `Dockerfile` next to your preferred `docker-compose.(XYZ).yml`:
+This setup keeps the official Paperless-ngx image unchanged: Paperless installs the plugin with a startup script, and FOP runs in its own container (`ghcr.io/bitbetterde/paperless-ngx-erechnung-fop`).
+
+1. Set up Paperless-ngx with Docker Compose (e.g. by using [one of the official compose files](https://github.com/paperless-ngx/paperless-ngx/tree/main/docker/compose)).
+2. Next to your `docker-compose.yml`, create a folder `custom-init` with a script `install-erechnung.sh`:
+
+```bash
+#!/bin/bash
+pip install --no-cache-dir paperless-ngx-erechnung
+```
+
+   Paperless only runs startup scripts owned by `root` and not writable by others:
+
+```bash
+sudo chown -R root:root custom-init
+sudo chmod 755 custom-init custom-init/install-erechnung.sh
+```
+
+3. Add the FOP service, mount the script folder and point Paperless at the FOP service in your `docker-compose.yml`:
+
+```yaml
+services:
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    # ...keep the rest of your existing config (env, volumes, depends_on, ...)
+    environment:
+      PAPERLESS_ERECHNUNG_FOP_URL: http://fop:8080
+    volumes:
+      - ./custom-init:/custom-cont-init.d:ro
+
+  fop:
+    image: ghcr.io/bitbetterde/paperless-ngx-erechnung-fop:latest
+    restart: unless-stopped
+```
+
+   Don't publish a port for the `fop` service; Paperless reaches it over the Compose network.
+
+4. Restart your Compose stack:
+
+```bash
+docker compose up -d
+```
+
+The startup script runs every time the container starts, so it needs access to PyPI and installs the newest release each time. To stay on a known version, pin it in the script (e.g. `pip install paperless-ngx-erechnung==X.Y.Z`). If the install fails, Paperless still starts, just without the plugin — check the `[custom-init]` lines in the logs.
+
+The FOP service listens on port 8080 and accepts `POST /render` (XSL-FO in, PDF out) and `GET /health`. It only reads its bundled fonts and refuses all other files and URLs. Optional environment variables: `PORT`, `THREADS` (default: number of CPUs) and `MAX_REQUEST_BYTES` (default: 64 MB).
+
+### Docker with a custom image (FOP inside Paperless)
+
+If you'd rather not run a second container, build a Paperless image that includes FOP and a Java runtime. Leave `PAPERLESS_ERECHNUNG_FOP_URL` unset; the plugin then uses the local `fop` binary.
+
+1. Create the following `Dockerfile` next to your preferred `docker-compose.(XYZ).yml`:
 
 ```dockerfile
 FROM ghcr.io/paperless-ngx/paperless-ngx:latest
@@ -64,34 +113,19 @@ RUN pip install --no-cache-dir paperless-ngx-erechnung
 USER paperless
 ```
 
-3. Build this modified image. You can choose any image and tag name that you like for this custom image. Here, we'll be using `paperless-ngx-erechnung:latest`:
-
-```bash
-docker build -t paperless-ngx-erechnung:latest .
-```
-
-4. Then point the `webserver` service in your existing `docker-compose.yml` at the newly created image instead of the upstream one:
-
-```yaml
-services:
-  webserver:
-    image: paperless-ngx-erechnung:latest
-    # ...keep the rest of your existing config (env, volumes, depends_on, ...)
-```
-
-5. Restart your Compose stack to pick up the new image:
-
-```bash
-docker compose up -d
-```
-
-(Alternatively, if you want to do this in a single step, you can let Compose handle the build by setting `build: .` on the service instead of `image:` and run `docker compose build webserver && docker compose up -d`.)
+2. Let Compose build it by setting `build: .` on the `webserver` service instead of `image:`:
 
 ```yaml
 services:
   webserver:
     build: .
     # ...keep the rest of your existing config (env, volumes, depends_on, ...)
+```
+
+3. Build and restart:
+
+```bash
+docker compose build webserver && docker compose up -d
 ```
 
 ### Bare-metal
@@ -111,14 +145,22 @@ sudo systemctl restart paperless-webserver paperless-consumer paperless-schedule
 
 ## Development
 
-Archive PDF rendering shells out to **Apache FOP**, which needs a JRE. The Dockerfile installs both (`default-jre-headless` + `fop`). For local development, install via your package manager:
+Archive PDF rendering needs **Apache FOP**. For local development, either install it via your package manager:
 
 ```bash
 brew install fop          # macOS — pulls in openjdk
 apt install fop           # Debian/Ubuntu — pulls in default-jre-headless
 ```
 
-The XSLT-dependent rendering tests skip if the `fop` binary is not on PATH. All other runtime dependencies (qpdf for pikepdf, libxml2/libxslt for lxml, libpdfium, Saxon-HE native libs, Pillow) are bundled in their respective wheels and need no system install.
+or run the FOP service container and point the plugin at it:
+
+```bash
+docker build -f fop-server/Dockerfile -t paperless-ngx-erechnung-fop .
+docker run -d -p 127.0.0.1:8080:8080 paperless-ngx-erechnung-fop
+export PAPERLESS_ERECHNUNG_FOP_URL=http://localhost:8080
+```
+
+The XSLT-dependent rendering tests skip if neither is available. All other runtime dependencies (qpdf for pikepdf, libxml2/libxslt for lxml, libpdfium, Saxon-HE native libs, Pillow) are bundled in their respective wheels and need no system install.
 
 Then:
 
