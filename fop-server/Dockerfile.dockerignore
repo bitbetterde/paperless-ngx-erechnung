@@ -1,0 +1,4 @@
+*
+!fop-server/pom.xml
+!fop-server/src
+!src/paperless_ngx_erechnung/xslt/conf

@@ -11,9 +11,13 @@ Pipeline:
 3. **PDF** — Apache FOP turns the XSL-FO into a PDF.
 
 The XSLT stages need an XSLT 2.0 processor; we use ``saxonche`` (Saxon-HE
-bundled as a native binary, no JRE). FOP itself is a JVM application; we
-shell out to the ``fop`` binary on PATH, which the Docker image
-installs alongside ``default-jre-headless``.
+bundled as a native binary, no JRE). FOP itself is a JVM application and
+runs in one of two ways:
+
+* If ``PAPERLESS_ERECHNUNG_FOP_URL`` is set, the FO is POSTed to the FOP
+  service in ``fop-server/`` (a separate container), so the Paperless
+  image needs no JRE.
+* Otherwise we shell out to the ``fop`` binary on PATH.
 
 Why FOP and not WeasyPrint (HTML route)?
 ----------------------------------------
@@ -26,15 +30,20 @@ to PDF/A from a raster-leaning HTML renderer. ``xr-pdf.xsl`` is purpose-built
 for archive PDFs, ships from KoSIT, and is the stylesheet that produces
 the layout the spec authors actually intended.
 
-The price is a JRE in the container image. We pay it.
+The price is a JRE somewhere: in the Paperless image, or in the FOP
+service container.
 """
 
 from __future__ import annotations
 
 import logging
 import shutil
+import os
 import subprocess
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from lxml import etree
@@ -69,6 +78,17 @@ _PDF_STYLESHEET = "xr-pdf.xsl"
 # typically runs on and short enough to fail fast on a hang.
 _FOP_TIMEOUT_SECONDS = 120
 
+# Base URL of the FOP service (e.g. ``http://fop:8080``). When set, FOP runs
+# remotely and the local ``fop`` binary is not needed.
+FOP_URL_ENV = "PAPERLESS_ERECHNUNG_FOP_URL"
+
+_INSTALL_DOCS_URL = (
+    "https://github.com/bitbetterde/paperless-ngx-erechnung/blob/main/INSTALL.md"
+)
+
+# The FOP service's error responses are short text; cap what we read.
+_MAX_ERROR_DETAIL_BYTES = 4096
+
 
 class RenderingNotConfiguredError(RuntimeError):
     """Raised when the vendored KoSIT XSLT stylesheets are missing.
@@ -80,11 +100,11 @@ class RenderingNotConfiguredError(RuntimeError):
 
 
 class FopNotAvailableError(RuntimeError):
-    """Raised when the ``fop`` binary cannot be found on PATH.
+    """Raised when no FOP service is configured and ``fop`` is not on PATH.
 
-    Apache FOP is an external dependency installed by the Docker image
-    (``default-jre-headless`` + ``fop``). Local development needs it on
-    PATH as well — see the README's Development section.
+    Apache FOP is an external dependency: either the FOP service container
+    (``PAPERLESS_ERECHNUNG_FOP_URL``) or a local ``fop`` binary plus a JRE.
+    See INSTALL.md.
     """
 
 
@@ -96,7 +116,7 @@ def render_xrechnung_to_pdf(xml_bytes: bytes, out_pdf: Path) -> None:
     RenderingNotConfiguredError
         If the KoSIT XSLT files have not been vendored.
     FopNotAvailableError
-        If the ``fop`` binary is not on PATH.
+        If no FOP service is configured and ``fop`` is not on PATH.
     RuntimeError
         If any stage of the transform fails.
     """
@@ -222,6 +242,64 @@ def _materialize_fop_config(tmp_dir: Path) -> Path | None:
 def _fo_to_pdf(fo_bytes: bytes, out_pdf: Path) -> None:
     """Write *fo_bytes* (XSL-FO) to *out_pdf* as a PDF using Apache FOP.
 
+    Uses the FOP service when ``PAPERLESS_ERECHNUNG_FOP_URL`` is set,
+    otherwise the local ``fop`` binary.
+    """
+    service_url = os.environ.get(FOP_URL_ENV, "").strip()
+    if service_url:
+        _fo_to_pdf_remote(fo_bytes, out_pdf, service_url)
+    else:
+        _fo_to_pdf_local(fo_bytes, out_pdf)
+
+
+def _fo_to_pdf_remote(fo_bytes: bytes, out_pdf: Path, service_url: str) -> None:
+    """Render via the FOP service: POST the FO to ``<service_url>/render``.
+
+    Proxy environment variables are ignored on purpose: the service is
+    meant to sit next to Paperless on an internal network, and routing
+    that traffic through a corporate proxy would break it.
+    """
+    endpoint = service_url.rstrip("/") + "/render"
+    if urllib.parse.urlsplit(endpoint).scheme not in ("http", "https"):
+        msg = f"{FOP_URL_ENV} must be an http:// or https:// URL, got {service_url!r}."
+        raise RuntimeError(msg)
+
+    request = urllib.request.Request(  # noqa: S310 - scheme checked above
+        endpoint,
+        data=fo_bytes,
+        method="POST",
+        headers={"Content-Type": "application/xml"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=_FOP_TIMEOUT_SECONDS) as response:
+            pdf_bytes = response.read()
+    except urllib.error.HTTPError as exc:
+        body = (
+            exc.read(_MAX_ERROR_DETAIL_BYTES).decode("utf-8", errors="replace").strip()
+        )
+        detail = body or str(exc.reason)
+        msg = (
+            f"FOP service at {endpoint} failed (HTTP {exc.code}) rendering "
+            f"XSL-FO to PDF: {detail}"
+        )
+        raise RuntimeError(msg) from exc
+    except (urllib.error.URLError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        msg = f"Could not reach FOP service at {endpoint}: {reason}"
+        raise RuntimeError(msg) from exc
+
+    if not pdf_bytes.startswith(b"%PDF-"):
+        msg = f"FOP service at {endpoint} returned a response that is not a PDF."
+        raise RuntimeError(msg)
+
+    out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    out_pdf.write_bytes(pdf_bytes)
+
+
+def _fo_to_pdf_local(fo_bytes: bytes, out_pdf: Path) -> None:
+    """Render with the local ``fop`` binary.
+
     Shells out to the ``fop`` binary, which the Docker image installs
     alongside a headless JRE. FOP reads the FO from a temp file (its CLI
     does support ``-fo -`` for stdin in newer releases, but Debian's ``fop``
@@ -231,11 +309,12 @@ def _fo_to_pdf(fo_bytes: bytes, out_pdf: Path) -> None:
     fop_bin = shutil.which("fop")
     if fop_bin is None:
         msg = (
-            "Apache FOP binary not found on PATH. In the Docker image, "
-            "ensure the `fop` package is installed (the Dockerfile adds it "
-            "via apt). For local development, install it via your package "
-            "manager: `brew install fop` on macOS, `apt install fop` on "
-            "Debian/Ubuntu."
+            f"Apache FOP not available: {FOP_URL_ENV} is not set and the "
+            "`fop` binary is not on PATH. In Docker, run the FOP service "
+            f"container and set {FOP_URL_ENV} (see {_INSTALL_DOCS_URL}), or install "
+            "the `fop` package in your image. For local development, install "
+            "it via your package manager: `brew install fop` on macOS, "
+            "`apt install fop` on Debian/Ubuntu."
         )
         raise FopNotAvailableError(msg)
 
