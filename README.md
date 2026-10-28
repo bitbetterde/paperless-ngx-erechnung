@@ -94,7 +94,7 @@ docker compose up -d
 
 The startup script runs every time the container starts, so it needs access to PyPI and installs the newest release each time. To stay on a known version, pin it in the script (e.g. `pip install paperless-ngx-erechnung==X.Y.Z`). If the install fails, Paperless still starts, just without the plugin — check the `[custom-init]` lines in the logs.
 
-The FOP service listens on port 8080 and accepts `POST /render` (XSL-FO in, PDF out) and `GET /health`. It only reads its bundled fonts and refuses all other files and URLs. Optional environment variables: `PORT`, `THREADS` (default: number of CPUs) and `MAX_REQUEST_BYTES` (default: 64 MB).
+The FOP service listens on port 8080 and accepts `POST /render` (XSL-FO in, PDF out) and `GET /health`. It only reads its bundled fonts and refuses all other files and URLs. Optional environment variables: `PORT`, `THREADS` (default: number of CPUs), `MAX_REQUEST_BYTES` (default: 64 MB), `REQUEST_TIMEOUT_SECONDS` (time to receive a request, default: 60) and `RESPONSE_TIMEOUT_SECONDS` (time to render and send the PDF, default: 150; keep it above the plugin's 120-second render timeout).
 
 ### Docker with a custom image (FOP inside Paperless)
 

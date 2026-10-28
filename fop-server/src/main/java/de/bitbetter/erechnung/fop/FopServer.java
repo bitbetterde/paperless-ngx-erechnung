@@ -62,6 +62,12 @@ public final class FopServer {
         int port = Integer.parseInt(env("PORT", "8080"));
         long maxRequestBytes = Long.parseLong(env("MAX_REQUEST_BYTES", String.valueOf(64L * 1024 * 1024)));
         int threads = Integer.parseInt(env("THREADS", String.valueOf(Runtime.getRuntime().availableProcessors())));
+        // The JDK server never times out slow clients unless told to. Both
+        // values are in seconds. The response timer starts once the request
+        // body is read, so it includes rendering and must stay above the
+        // plugin's 120 s render timeout. Must be set before the server starts.
+        setDefaultProperty("sun.net.httpserver.maxReqTime", env("REQUEST_TIMEOUT_SECONDS", "60"));
+        setDefaultProperty("sun.net.httpserver.maxRspTime", env("RESPONSE_TIMEOUT_SECONDS", "150"));
 
         FopFactory factory = new FopConfParser(config, new FontsOnlyResolver(fontsDir))
                 .getFopFactoryBuilder()
@@ -175,6 +181,13 @@ public final class FopServer {
         exchange.sendResponseHeaders(status, body.length);
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(body);
+        }
+    }
+
+    /** Sets a system property unless it was already given with -D. */
+    private static void setDefaultProperty(String name, String value) {
+        if (System.getProperty(name) == null) {
+            System.setProperty(name, value);
         }
     }
 
