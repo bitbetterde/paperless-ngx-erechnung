@@ -82,6 +82,10 @@ _FOP_TIMEOUT_SECONDS = 120
 # remotely and the local ``fop`` binary is not needed.
 FOP_URL_ENV = "PAPERLESS_ERECHNUNG_FOP_URL"
 
+_INSTALL_DOCS_URL = (
+    "https://github.com/bitbetterde/paperless-ngx-erechnung/blob/main/INSTALL.md"
+)
+
 # The FOP service's error responses are short text; cap what we read.
 _MAX_ERROR_DETAIL_BYTES = 4096
 
@@ -100,7 +104,7 @@ class FopNotAvailableError(RuntimeError):
 
     Apache FOP is an external dependency: either the FOP service container
     (``PAPERLESS_ERECHNUNG_FOP_URL``) or a local ``fop`` binary plus a JRE.
-    See the README's Installation section.
+    See INSTALL.md.
     """
 
 
@@ -307,7 +311,7 @@ def _fo_to_pdf_local(fo_bytes: bytes, out_pdf: Path) -> None:
         msg = (
             f"Apache FOP not available: {FOP_URL_ENV} is not set and the "
             "`fop` binary is not on PATH. In Docker, run the FOP service "
-            f"container and set {FOP_URL_ENV} (see the README), or install "
+            f"container and set {FOP_URL_ENV} (see {_INSTALL_DOCS_URL}), or install "
             "the `fop` package in your image. For local development, install "
             "it via your package manager: `brew install fop` on macOS, "
             "`apt install fop` on Debian/Ubuntu."
